@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "User": {
+      "title": "Usuário",
+      "description": "Dados do usuário do sistema",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nome": { "type": "string" },
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "email": { "type": "string" },
+        "perfil": { "type": "string", "enum": ["ADMIN", "OPERACIONAL", "VISUALIZADOR"] },
+        "status": { "type": "string", "enum": ["ATIVO", "INATIVO"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["nome", "username", "password", "email", "perfil", "status"]
+    },
+    "Debito": {
+      "title": "Débito",
+      "description": "Registro de débito de profissional/empresa",
+      "type": "object",
+      "properties": {
+        "crb": { "type": "string" },
+        "nome": { "type": "string" },
+        "nomeDebito": { "type": "string" },
+        "ano": { "type": "integer" },
+        "dataVencimento": { "type": "string", "format": "date" },
+        "valor": { "type": "number" },
+        "valorCorrigido": { "type": "number" },
+        "statusGeral": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "audit": { "type": "object" }
+      },
+      "required": ["crb", "nome", "ano", "valor"]
+    },
+    "Notificacao": {
+      "title": "Notificação",
+      "description": "Notificação vinculada a um débito",
+      "type": "object",
+      "properties": {
+        "debitoId": { "type": "string" },
+        "dataNotificacao": { "type": "string", "format": "date" },
+        "tipo": { "type": "string" },
+        "prazoDias": { "type": "integer" },
+        "statusPrazo": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["debitoId", "dataNotificacao", "tipo"]
+    },
+    "Negociacao": {
+      "title": "Negociação",
+      "description": "Registro de negociação de múltiplos débitos",
+      "type": "object",
+      "properties": {
+        "crb": { "type": "string" },
+        "debitosIds": { "type": "array", "items": { "type": "string" } },
+        "valorTotal": { "type": "number" },
+        "valorNegociado": { "type": "number" },
+        "formaNegociacao": { "type": "string" },
+        "nParcelas": { "type": "integer" },
+        "statusContato": { "type": "string" },
+        "dataNegociacao": { "type": "string", "format": "date" },
+        "observacoes": { "type": "string" }
+      },
+      "required": ["crb", "debitosIds", "valorNegociado"]
+    },
+    "Oficio": {
+      "title": "Ofício",
+      "description": "Registro de ofícios emitidos",
+      "type": "object",
+      "properties": {
+        "numero": { "type": "string" },
+        "assunto": { "type": "string" },
+        "destinatario": { "type": "string" },
+        "dataEmissao": { "type": "string", "format": "date" },
+        "ano": { "type": "integer" }
+      },
+      "required": ["numero", "assunto", "dataEmissao", "ano"]
+    },
+    "Processo": {
+      "title": "Processo Administrativo",
+      "description": "Registro de processos administrativos",
+      "type": "object",
+      "properties": {
+        "numero": { "type": "string" },
+        "descricao": { "type": "string" },
+        "interessado": { "type": "string" },
+        "dataAbertura": { "type": "string", "format": "date" },
+        "ano": { "type": "integer" },
+        "status": { "type": "string" }
+      },
+      "required": ["numero", "descricao", "dataAbertura", "ano"]
+    },
+    "Auditoria": {
+      "title": "Auditoria",
+      "description": "Logs de alterações no sistema",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "acao": { "type": "string", "enum": ["CRIACAO", "EDICAO", "EXCLUSAO", "IMPORTACAO"] },
+        "modulo": { "type": "string" },
+        "entidadeId": { "type": "string" },
+        "alteracoes": { "type": "object" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "acao", "modulo", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": "User", "description": "Coleção de usuários" },
+    "/debits/{debitoId}": { "schema": "Debito", "description": "Coleção de débitos" },
+    "/notifications/{notificacaoId}": { "schema": "Notificacao", "description": "Coleção de notificações" },
+    "/negotiations/{negociacaoId}": { "schema": "Negociacao", "description": "Coleção de negociações" },
+    "/oficios/{oficioId}": { "schema": "Oficio", "description": "Coleção de ofícios" },
+    "/processos/{processoId}": { "schema": "Processo", "description": "Coleção de processos" },
+    "/auditoria/{logId}": { "schema": "Auditoria", "description": "Logs de auditoria" }
+  }
+}
