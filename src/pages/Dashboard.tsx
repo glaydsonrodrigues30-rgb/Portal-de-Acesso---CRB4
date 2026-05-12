@@ -41,18 +41,18 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="space-y-8 pb-20">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 border-b-2 border-slate-200/60 pb-8">
+    <div className="max-w-7xl mx-auto w-full px-4 md:px-8 pb-20 space-y-8 overflow-x-hidden">
+      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 border-b-2 border-slate-200/60 pb-8 mt-4">
         <div className="flex items-center gap-6">
           <img src="https://i.postimg.cc/CLwGjkqN/logo.png" alt="CRB-4 Logo" className="h-16 hidden md:block drop-shadow-sm" />
           <div className="flex flex-col gap-2 border-l-4 border-crb-blue pl-6">
-            <h2 className="text-2xl md:text-5xl font-serif font-black text-crb-navy tracking-tight">Painel de Controle</h2>
-            <p className="text-sm md:text-lg text-slate-500 font-bold font-sans italic opacity-80">Acompanhamento em tempo real das métricas do CRB-4.</p>
+            <h2 className="text-2xl md:text-3xl font-serif font-black text-crb-navy tracking-tight">Painel de Controle</h2>
+            <p className="text-sm md:text-base text-slate-500 font-bold font-sans italic opacity-80">Métricas em tempo real do CRB-4.</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex bg-slate-100 p-1.5 rounded-2xl gap-1 overflow-x-auto whitespace-nowrap scrollbar-hide">
+        <div className="flex items-center gap-4 w-full lg:w-auto overflow-hidden">
+          <div className="flex flex-wrap bg-slate-100 p-1.5 rounded-2xl gap-1 w-full shadow-inner justify-center md:justify-start">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -61,13 +61,13 @@ export default function Dashboard() {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as DashboardTab)}
                 className={cn(
-                  "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all",
+                  "flex items-center gap-2 px-3 md:px-4 py-2 md:py-2.5 rounded-xl text-[10px] md:text-sm font-bold transition-all whitespace-nowrap",
                   isActive 
                     ? "bg-white text-crb-navy shadow-sm ring-1 ring-slate-200" 
                     : "text-slate-500 hover:text-crb-navy hover:bg-white/50"
                 )}
               >
-                <Icon size={16} className={isActive ? tab.color : 'text-slate-400'} />
+                <Icon size={14} className={isActive ? tab.color : 'text-slate-400'} />
                 {tab.label}
               </button>
             );
@@ -76,7 +76,7 @@ export default function Dashboard() {
       </div>
     </div>
 
-    <div className="mt-8">
+    <div className="mt-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
         {renderContent()}
       </div>
     </div>

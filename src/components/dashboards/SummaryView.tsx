@@ -37,66 +37,84 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
         const oficiosCol = collection(db, 'oficios');
         const processosCol = collection(db, 'processos');
 
-        // Aggregates for main stats
+        // Fetching all to apply complex JS logic as requested
         const [
-          debitosAgg, 
-          notifAgg, 
-          negAgg, 
-          oficiosAgg, 
-          processosAgg,
-          vencidosAgg,
-          vencidosValorAgg,
-          procPendentesAgg
+          debitosSnap,
+          notifSnap,
+          negSnap,
+          oficiosSnap,
+          processosSnap
         ] = await Promise.all([
-          getAggregateFromServer(debitosCol, { 
-            total: count(), 
-            valorAberto: sum('valorCorrigido') 
-          }),
-          getAggregateFromServer(notifCol, { total: count() }),
-          getAggregateFromServer(negCol, { total: count() }),
-          getAggregateFromServer(oficiosCol, { total: count() }),
-          getAggregateFromServer(processosCol, { total: count() }),
-          getAggregateFromServer(query(debitosCol, where('statusGeral', '==', 'VENCIDO')), { count: count() }),
-          getAggregateFromServer(query(debitosCol, where('statusGeral', '==', 'VENCIDO')), { valorVencido: sum('valorCorrigido') }),
-          getAggregateFromServer(query(processosCol, where('status', '==', 'PENDENTE')), { count: count() })
+          getDocs(debitosCol),
+          getDocs(notifCol),
+          getDocs(negCol),
+          getDocs(oficiosCol),
+          getDocs(processosCol)
         ]);
 
-        // Correct logic for overdue debts (dataVencimento < today and not regularized)
         const today = new Date();
-        const todayISO = today.toISOString();
-        
-        // We'll fetch the debits that are not regularized to calculate the overdue stats accurately
-        const debitsSnap = await getDocs(query(debitosCol, where('statusGeral', '!=', 'regularizado')));
-        
-        let overdueCount = 0;
-        let overdueSum = 0;
-        
-        debitsSnap.forEach(doc => {
-          const data = doc.data();
-          if (data.dataVencimento) {
-            const vencimento = new Date(data.dataVencimento);
-            if (vencimento < today) {
-              overdueCount++;
-              overdueSum += data.valorCorrigido || 0;
-            }
+        today.setHours(0, 0, 0, 0); // Normalize today to start of day
+
+        // Robust Date Parser as requested
+        const parseDate = (d: any) => {
+          if (!d) return null;
+          if (d instanceof Date) return d;
+          const s = String(d);
+          if (s.includes('/')) {
+            const [dia, mes, ano] = s.split('/');
+            return new Date(`${ano}-${mes}-${dia}`);
           }
+          return new Date(s);
+        };
+        
+        // Calculation Logic according to request
+        const debitos = debitosSnap.docs.map(doc => doc.data());
+        const notifications = notifSnap.docs.map(doc => doc.data());
+        const negotiations = negSnap.docs.map(doc => doc.data());
+
+        // 1. Débitos Vencidos: data < hoje && status !== "pago"
+        const vencidos = debitos.filter(d => {
+          const data = parseDate(d.dataVencimento);
+          if (!data || isNaN(data.getTime())) return false;
+          
+          const status = String(d.situacao || d.status || d.statusGeral || '').toLowerCase();
+          return data < today && status !== "pago" && status !== "regularizado";
         });
 
-        // Logic for notifications with deadline passed and no response (simplified)
-        const lateNotifSnap = await getDocs(query(notifCol, where('dataLimite', '<', todayISO)));
-        const lateNotifCount = lateNotifSnap.size;
+        // 2. Valor Total: sum of valorCorrigido
+        const valorTotalAberto = debitos.reduce(
+          (acc, d) => acc + Number(d.valorCorrigido || 0),
+          0
+        );
+
+        const valorTotalVencido = vencidos.reduce(
+          (acc, d) => acc + Number(d.valorCorrigido || 0),
+          0
+        );
+
+        // 3. Negociações: apenas status ativo ou concluído
+        const negociacoesValidas = negotiations.filter(n => {
+          const status = (n.status || n.statusGeral || n.statusContato || '').toLowerCase();
+          return status === 'ativo' || status === 'concluido' || status === 'concluído';
+        });
+
+        // 4. Notificações: registros válidos (count non-empty)
+        const notificacoesValidas = notifications.filter(n => n.tipo || n.dataNotificacao);
 
         setStats({
-          totalDebitos: debitosAgg.data().total,
-          valorTotalAberto: debitosAgg.data().valorAberto || 0,
-          valorTotalVencido: overdueSum,
-          totalNotificacoes: notifAgg.data().total,
-          totalNegociacoes: negAgg.data().total,
-          totalOficios: oficiosAgg.data().total,
-          totalProcessos: processosAgg.data().total,
-          debitosVencidos: overdueCount,
-          processosPendentes: procPendentesAgg.data().count,
-          notificacoesAtrasadas: lateNotifCount,
+          totalDebitos: debitos.length,
+          valorTotalAberto: valorTotalAberto,
+          valorTotalVencido: valorTotalVencido,
+          totalNotificacoes: notificacoesValidas.length,
+          totalNegociacoes: negociacoesValidas.length,
+          totalOficios: oficiosSnap.size,
+          totalProcessos: processosSnap.size,
+          debitosVencidos: vencidos.length,
+          processosPendentes: processosSnap.docs.filter(p => (p.data().status || '').toLowerCase() === 'pendente').length,
+          notificacoesAtrasadas: notifications.filter(n => {
+            const refDate = n.dataLimite ? parseDate(n.dataLimite) : (n.dataNotificacao && n.prazoDias ? new Date(parseDate(n.dataNotificacao)!.getTime() + (n.prazoDias * 86400000)) : null);
+            return refDate && refDate < today && (n.statusPrazo || '').toLowerCase() !== 'respondido';
+          }).length,
         });
       } catch (err) {
         console.error("Erro ao carregar summary stats:", err);
@@ -109,8 +127,8 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
   }, []);
 
   if (loading) return <div className="animate-pulse space-y-8">
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {[1, 2, 3, 4, 5, 6].map(i => <div key={i} className="h-32 bg-slate-100 rounded-2xl" />)}
+    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+      {[1, 2, 3, 4, 5, 6, 7, 8].map(i => <div key={i} className="h-40 bg-slate-100 rounded-[2rem]" />)}
     </div>
   </div>;
 
@@ -118,21 +136,21 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
 
   return (
     <div className="space-y-12">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         <StatItem 
-          title="Débitos" 
+          title="Débitos Totais" 
           value={stats.totalDebitos.toString()} 
           icon={CreditCard} 
           color="bg-crb-navy" 
-          label="Total de Registros"
+          label="Base Sincronizada"
           onClick={() => onTabChange('debitos')}
         />
         <StatItem 
-          title="Valor em Aberto" 
+          title="Valor Global" 
           value={formatCurrency(stats.valorTotalAberto)} 
           icon={TrendingUp} 
           color="bg-emerald-600" 
-          label="Valor Corrigido Total"
+          label="Total Corrigido"
           onClick={() => onTabChange('debitos')}
         />
         <StatItem 
@@ -148,7 +166,7 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           value={stats.totalNotificacoes.toString()} 
           icon={Mail} 
           color="bg-crb-blue" 
-          label="Comunicações Enviadas"
+          label="Comunicações Válidas"
           onClick={() => onTabChange('notificacoes')}
         />
         <StatItem 
@@ -156,8 +174,16 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           value={stats.totalNegociacoes.toString()} 
           icon={Handshake} 
           color="bg-crb-purple" 
-          label="Acordos Realizados"
+          label="Acordos Ativos/Concluídos"
           onClick={() => onTabChange('negociacoes')}
+        />
+        <StatItem 
+          title="Ofícios" 
+          value={stats.totalOficios.toString()} 
+          icon={FileText} 
+          color="bg-slate-600" 
+          label="Expedições Registradas"
+          onClick={() => onTabChange('oficios')}
         />
         <StatItem 
           title="Processos" 
@@ -177,15 +203,17 @@ function StatItem({ title, value, icon: Icon, color, label, onClick }: any) {
     <motion.div 
       whileHover={{ y: -5 }}
       onClick={onClick}
-      className="bg-white p-8 rounded-[2rem] border border-slate-200 shadow-xl shadow-slate-200/40 flex items-center gap-6 group hover:border-crb-blue/40 transition-all cursor-pointer"
+      className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-xl shadow-slate-200/40 flex flex-col justify-between gap-6 group hover:border-crb-blue/40 transition-all cursor-pointer h-full"
     >
-      <div className={cn("p-5 rounded-2xl transition-transform group-hover:scale-110 shadow-2xl text-white", color)}>
-        <Icon size={24} />
+      <div className="flex items-center gap-4">
+        <div className={cn("p-4 rounded-2xl transition-transform group-hover:scale-110 shadow-lg text-white", color)}>
+          <Icon size={20} />
+        </div>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] opacity-80">{title}</p>
       </div>
-      <div className="flex-1">
-        <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1.5 opacity-80">{title}</p>
-        <p className="text-4xl font-serif font-black text-crb-navy tracking-tighter leading-none">{value}</p>
-        <p className="text-xs text-slate-500 font-bold mt-2.5 flex items-center gap-2">
+      <div>
+        <p className="text-3xl font-serif font-black text-crb-navy tracking-tighter leading-tight truncate">{value}</p>
+        <p className="text-[10px] text-slate-500 font-bold mt-2 flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
           {label}
         </p>
