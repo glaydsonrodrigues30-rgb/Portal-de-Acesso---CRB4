@@ -21,48 +21,87 @@ export default function DebitosView() {
         setLoading(true);
         const col = collection(db, 'debits');
         
-        // Basic Aggregates
-        const agg = await getAggregateFromServer(col, {
-          total: count(),
-          valorTotal: sum('valor'),
-          valorCorrigido: sum('valorCorrigido')
-        });
+        const snapshot = await getDocs(query(col, limit(2000))); // Fetch more for better charts
+        const allDebits = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
 
-        // Vencidos & Antigos
-        const vencidosAgg = await getAggregateFromServer(query(col, where('statusGeral', '==', 'VENCIDO')), { count: count() });
-        
-        const fiveYearsAgo = (new Date().getFullYear()) - 5;
-        const antigosAgg = await getAggregateFromServer(query(col, where('ano', '<=', fiveYearsAgo)), { count: count() });
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
 
-        // Ranking (Limit to top 5)
-        const rankingSnap = await getDocs(query(col, orderBy('valorCorrigido', 'desc'), limit(5)));
-        const ranking = rankingSnap.docs.map(d => ({
-          crb: d.data().crb,
-          nome: d.data().nome,
-          valor: d.data().valorCorrigido
-        }));
+        const parseDate = (d: any) => {
+          if (!d) return null;
+          if (d instanceof Date) return d;
+          const s = String(d);
+          if (s.includes('/')) {
+            const [dia, mes, ano] = s.split('/');
+            return new Date(`${ano}-${mes}-${dia}`);
+          }
+          return new Date(s);
+        };
 
-        // Grouping logic (Since Firestore doesn't support GROUP BY yet)
-        const snapshot = await getDocs(query(col, limit(1000)));
-        const data = snapshot.docs.map(d => d.data());
-        
+        let valorTotal = 0;
+        let valorCorrigido = 0;
+        let vencidosCount = 0;
+        let antigosCount = 0;
         const statusMap: any = {};
         const yearMap: any = {};
-        
-        data.forEach((d: any) => {
-          statusMap[d.statusGeral] = (statusMap[d.statusGeral] || 0) + 1;
-          yearMap[d.ano] = (yearMap[d.ano] || 0) + 1;
+        const yearValueMap: any = {};
+        const fiveYearsAgo = (new Date().getFullYear()) - 5;
+
+        allDebits.forEach((d: any) => {
+          valorTotal += Number(d.valor || 0);
+          valorCorrigido += Number(d.valorCorrigido || 0);
+          
+          const vDate = parseDate(d.dataVencimento);
+          const status = String(d.situacao || d.status || d.statusGeral || '').toLowerCase();
+          const isVencido = vDate && vDate < today && status !== "pago" && status !== "regularizado";
+          
+          if (isVencido) vencidosCount++;
+          if (Number(d.ano) <= fiveYearsAgo) antigosCount++;
+
+          const statusLabel = isVencido ? 'Vencido' : (status === 'pago' || status === 'regularizado' ? 'Regularizado' : 'Em Aberto');
+          statusMap[statusLabel] = (statusMap[statusLabel] || 0) + 1;
+          
+          const ano = d.ano || 'S/A';
+          yearMap[ano] = (yearMap[ano] || 0) + 1;
+          yearValueMap[ano] = (yearValueMap[ano] || 0) + Number(d.valorCorrigido || 0);
         });
 
-        const statusData = Object.entries(statusMap).map(([name, value]) => ({ name, value }));
+        const statusData = Object.entries(statusMap).map(([name, value]) => ({ 
+          name, 
+          value,
+          percent: ((value as number) / allDebits.length * 100).toFixed(1)
+        }));
+
         const yearData = Object.entries(yearMap)
-          .map(([name, value]) => ({ name: name.toString(), value: value as number }))
+          .map(([name, count]) => ({ 
+            name: name.toString(), 
+            count: count as number,
+            value: yearValueMap[name] || 0
+          }))
           .sort((a, b) => parseInt(a.name) - parseInt(b.name));
 
+        // Ranking with status
+        const ranking = [...allDebits]
+          .sort((a: any, b: any) => (b.valorCorrigido || 0) - (a.valorCorrigido || 0))
+          .slice(0, 5)
+          .map((d: any) => {
+            const vDate = parseDate(d.dataVencimento);
+            const status = String(d.situacao || d.status || d.statusGeral || '').toLowerCase();
+            const isVencido = vDate && vDate < today && status !== "pago" && status !== "regularizado";
+            return {
+              crb: d.crb,
+              nome: d.nome,
+              valor: d.valorCorrigido,
+              status: isVencido ? 'Vencido' : 'Em Dia'
+            };
+          });
+
         setStats({
-          agg: agg.data(),
-          vencidos: vencidosAgg.data().count,
-          antigos: antigosAgg.data().count,
+          total: allDebits.length,
+          valorTotal,
+          valorCorrigido,
+          vencidos: vencidosCount,
+          antigos: antigosCount,
           ranking,
           statusData,
           yearData
@@ -83,9 +122,9 @@ export default function DebitosView() {
   return (
     <div className="space-y-10">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <MiniCard title="Volume de Débitos" value={stats.agg.total} icon={CreditCard} color="blue" />
-        <MiniCard title="Valor Original" value={formatCurrency(stats.agg.valorTotal)} icon={DollarSign} color="purple" />
-        <MiniCard title="Valor Corrigido" value={formatCurrency(stats.agg.valorCorrigido)} icon={Activity} color="emerald" />
+        <MiniCard title="Volume de Débitos" value={stats.total} icon={CreditCard} color="blue" />
+        <MiniCard title="Valor Original" value={formatCurrency(stats.valorTotal)} icon={DollarSign} color="purple" />
+        <MiniCard title="Valor Corrigido" value={formatCurrency(stats.valorCorrigido)} icon={Activity} color="emerald" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -108,6 +147,7 @@ export default function DebitosView() {
                    </Pie>
                    <Tooltip 
                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
+                    formatter={(value: any, name: any, props: any) => [`${value} (${props.payload.percent}%)`, name]}
                    />
                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
                  </PieChart>
@@ -121,7 +161,7 @@ export default function DebitosView() {
         </div>
 
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 transition-all hover:shadow-2xl overflow-hidden">
-          <h4 className="text-xl font-serif font-black text-crb-navy mb-8 px-2 border-l-4 border-crb-purple pl-4">Distribuição por Ano</h4>
+          <h4 className="text-xl font-serif font-black text-crb-navy mb-8 px-2 border-l-4 border-crb-purple pl-4">Distribuição por Ano (Valor)</h4>
           <div className="w-full h-[300px] min-h-[300px] flex items-center justify-center">
             {stats.yearData.length > 0 ? (
               <ResponsiveContainer width="99%" height="100%">
@@ -136,11 +176,38 @@ export default function DebitosView() {
                   <YAxis 
                     axisLine={false} 
                     tickLine={false} 
+                    tickFormatter={(val) => `R$${(val / 1000).toFixed(0)}k`}
                     tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }}
                   />
                   <Tooltip 
                     cursor={{fill: '#f8fafc'}} 
                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
+                    formatter={(val: any, name: any, props: any) => {
+                      if (name === 'value') return [formatCurrency(val), 'Valor Total'];
+                      return [val, name];
+                    }}
+                    labelFormatter={(label) => `Ano: ${label}`}
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        const data = payload[0].payload;
+                        return (
+                          <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100">
+                            <p className="font-black text-crb-navy mb-2">Ano {label}</p>
+                            <div className="space-y-1">
+                              <p className="text-sm font-bold text-emerald-600 flex justify-between gap-4">
+                                <span>Valor:</span>
+                                <span>{formatCurrency(data.value)}</span>
+                              </p>
+                              <p className="text-xs text-slate-500 font-bold flex justify-between gap-4">
+                                <span>Quantidade:</span>
+                                <span>{data.count} débitos</span>
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    }}
                   />
                   <Bar dataKey="value" fill="#1e3a8a" radius={[6, 6, 0, 0]} barSize={40} />
                 </BarChart>
@@ -156,7 +223,7 @@ export default function DebitosView() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
          <div className="lg:col-span-2 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-            <h4 className="text-lg font-serif font-bold text-crb-navy mb-6">Maiores Devedores (Valor Corrigido)</h4>
+            <h4 className="text-lg font-serif font-bold text-crb-navy mb-6">Maiores Devedores</h4>
             <div className="space-y-4">
               {stats.ranking.map((r: any, i: number) => (
                 <div key={i} className="flex items-center justify-between p-4 rounded-xl hover:bg-slate-50 border border-transparent hover:border-slate-100 transition-all">
@@ -166,10 +233,18 @@ export default function DebitosView() {
                     </div>
                     <div>
                       <p className="font-bold text-crb-navy text-sm uppercase">{r.nome}</p>
-                      <p className="text-xs text-slate-500">CRB: {r.crb}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-slate-500 font-bold">CRB: {r.crb}</span>
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider",
+                          r.status === 'Vencido' ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                        )}>
+                          {r.status}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                  <span className="font-serif font-bold text-emerald-600">{formatCurrency(r.valor)}</span>
+                  <span className="font-serif font-bold text-crb-navy">{formatCurrency(r.valor)}</span>
                 </div>
               ))}
             </div>

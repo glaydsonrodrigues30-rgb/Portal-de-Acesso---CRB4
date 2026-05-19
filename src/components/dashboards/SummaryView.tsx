@@ -4,7 +4,7 @@ import { db } from '../../lib/firebase';
 import { formatCurrency } from '../../lib/utils';
 import { 
   CreditCard, Mail, Handshake, FileText, FolderOpen, 
-  TrendingUp, AlertTriangle, Clock, ListFilter
+  TrendingUp, AlertTriangle, Clock, ListFilter, DollarSign
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../../lib/utils';
@@ -15,11 +15,15 @@ interface SummaryStats {
   valorTotalVencido: number;
   totalNotificacoes: number;
   totalNegociacoes: number;
+  totalNegociacoesAtivas: number;
+  totalNegociacoesConcluidas: number;
+  valorNegociadoTotal: number;
   totalOficios: number;
   totalProcessos: number;
   debitosVencidos: number;
   processosPendentes: number;
   notificacoesAtrasadas: number;
+  inadimplenciaPercent: number;
 }
 
 export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) => void }) {
@@ -92,11 +96,25 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           0
         );
 
+        const inadimplenciaPercent = valorTotalAberto > 0 
+          ? (valorTotalVencido / valorTotalAberto) * 100 
+          : 0;
+
         // 3. Negociações: apenas status ativo ou concluído
-        const negociacoesValidas = negotiations.filter(n => {
-          const status = (n.status || n.statusGeral || n.statusContato || '').toLowerCase();
-          return status === 'ativo' || status === 'concluido' || status === 'concluído';
+        const negociacoesAtivas = negotiations.filter(n => {
+          const status = String(n.status || n.statusGeral || n.statusContato || '').toLowerCase();
+          return status === 'ativo';
         });
+
+        const negociacoesConcluidas = negotiations.filter(n => {
+          const status = String(n.status || n.statusGeral || n.statusContato || '').toLowerCase();
+          return status === 'concluido' || status === 'concluído';
+        });
+
+        const valorNegociadoTotal = negotiations.reduce(
+          (acc, n) => acc + Number(n.valorNegociado || 0),
+          0
+        );
 
         // 4. Notificações: registros válidos (count non-empty)
         const notificacoesValidas = notifications.filter(n => n.tipo || n.dataNotificacao);
@@ -106,15 +124,19 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           valorTotalAberto: valorTotalAberto,
           valorTotalVencido: valorTotalVencido,
           totalNotificacoes: notificacoesValidas.length,
-          totalNegociacoes: negociacoesValidas.length,
+          totalNegociacoes: negotiations.length,
+          totalNegociacoesAtivas: negociacoesAtivas.length,
+          totalNegociacoesConcluidas: negociacoesConcluidas.length,
+          valorNegociadoTotal: valorNegociadoTotal,
           totalOficios: oficiosSnap.size,
           totalProcessos: processosSnap.size,
           debitosVencidos: vencidos.length,
-          processosPendentes: processosSnap.docs.filter(p => (p.data().status || '').toLowerCase() === 'pendente').length,
+          processosPendentes: processosSnap.docs.filter(p => String(p.data().status || '').toLowerCase() === 'pendente').length,
           notificacoesAtrasadas: notifications.filter(n => {
             const refDate = n.dataLimite ? parseDate(n.dataLimite) : (n.dataNotificacao && n.prazoDias ? new Date(parseDate(n.dataNotificacao)!.getTime() + (n.prazoDias * 86400000)) : null);
-            return refDate && refDate < today && (n.statusPrazo || '').toLowerCase() !== 'respondido';
+            return refDate && refDate < today && String(n.statusPrazo || '').toLowerCase() !== 'respondido';
           }).length,
+          inadimplenciaPercent,
         });
       } catch (err) {
         console.error("Erro ao carregar summary stats:", err);
@@ -135,64 +157,108 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
   if (!stats) return null;
 
   return (
-    <div className="space-y-12">
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-        <StatItem 
-          title="Débitos Totais" 
-          value={stats.totalDebitos.toString()} 
-          icon={CreditCard} 
-          color="bg-crb-navy" 
-          label="Base Sincronizada"
-          onClick={() => onTabChange('debitos')}
-        />
-        <StatItem 
-          title="Valor Global" 
-          value={formatCurrency(stats.valorTotalAberto)} 
-          icon={TrendingUp} 
-          color="bg-emerald-600" 
-          label="Total Corrigido"
-          onClick={() => onTabChange('debitos')}
-        />
-        <StatItem 
-          title="Débitos Vencidos" 
-          value={stats.debitosVencidos.toString()} 
-          icon={AlertTriangle} 
-          color="bg-red-600" 
-          label={`Total: ${formatCurrency(stats.valorTotalVencido)}`}
-          onClick={() => onTabChange('debitos')}
-        />
-        <StatItem 
-          title="Notificações" 
-          value={stats.totalNotificacoes.toString()} 
-          icon={Mail} 
-          color="bg-crb-blue" 
-          label="Comunicações Válidas"
-          onClick={() => onTabChange('notificacoes')}
-        />
-        <StatItem 
-          title="Negociações" 
-          value={stats.totalNegociacoes.toString()} 
-          icon={Handshake} 
-          color="bg-crb-purple" 
-          label="Acordos Ativos/Concluídos"
-          onClick={() => onTabChange('negociacoes')}
-        />
-        <StatItem 
-          title="Ofícios" 
-          value={stats.totalOficios.toString()} 
-          icon={FileText} 
-          color="bg-slate-600" 
-          label="Expedições Registradas"
-          onClick={() => onTabChange('oficios')}
-        />
-        <StatItem 
-          title="Processos" 
-          value={stats.totalProcessos.toString()} 
-          icon={FolderOpen} 
-          color="bg-crb-blue text-white" 
-          label="Ações Administrativas"
-          onClick={() => onTabChange('processos')}
-        />
+    <div className="space-y-12 pb-10">
+      <div>
+        <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-3">
+          <span className="w-8 h-[2px] bg-crb-blue"></span>
+          Indicadores Financeiros
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          <StatItem 
+            title="Total em Aberto" 
+            value={formatCurrency(stats.valorTotalAberto)} 
+            icon={TrendingUp} 
+            color="bg-crb-navy" 
+            label={`${stats.totalDebitos} registros ativos`}
+            onClick={() => onTabChange('debitos')}
+          />
+          <StatItem 
+            title="Valor Vencido" 
+            value={formatCurrency(stats.valorTotalVencido)} 
+            icon={AlertTriangle} 
+            color="bg-red-600" 
+            label={`${stats.debitosVencidos} débitos fora do prazo`}
+            onClick={() => onTabChange('debitos')}
+          />
+          <StatItem 
+            title="Inadimplência" 
+            value={`${stats.inadimplenciaPercent.toFixed(1)}%`} 
+            icon={ListFilter} 
+            color="bg-amber-500" 
+            label="Percentual sobre o total"
+            onClick={() => onTabChange('debitos')}
+          />
+          <StatItem 
+            title="Valor Negociado" 
+            value={formatCurrency(stats.valorNegociadoTotal)} 
+            icon={DollarSign} 
+            color="bg-emerald-600" 
+            label={`${stats.totalNegociacoes} acordos totais`}
+            onClick={() => onTabChange('negociacoes')}
+          />
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-3">
+          <span className="w-8 h-[2px] bg-crb-purple"></span>
+          Gestão de Acordos
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <StatItem 
+            title="Acordos Ativos" 
+            value={stats.totalNegociacoesAtivas.toString()} 
+            icon={Handshake} 
+            color="bg-crb-purple" 
+            label="Em fase de pagamento"
+            onClick={() => onTabChange('negociacoes')}
+          />
+          <StatItem 
+            title="Acordos Concluídos" 
+            value={stats.totalNegociacoesConcluidas.toString()} 
+            icon={Clock} 
+            color="bg-emerald-500" 
+            label="Regularização finalizada"
+            onClick={() => onTabChange('negociacoes')}
+          />
+          <div className="bg-slate-50 p-8 rounded-[2rem] border border-dashed border-slate-300 flex flex-col justify-center items-center text-center group hover:border-crb-blue/30 transition-all cursor-pointer" onClick={() => onTabChange('negociacoes')}>
+            <p className="text-slate-500 font-bold mb-2">Visão Detalhada</p>
+            <p className="text-xs text-slate-400">Acesse o módulo de negociações para filtros avançados</p>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.3em] mb-6 flex items-center gap-3">
+          <span className="w-8 h-[2px] bg-slate-400"></span>
+          Ações e Expedições
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          <StatItem 
+            title="Notificações" 
+            value={stats.totalNotificacoes.toString()} 
+            icon={Mail} 
+            color="bg-crb-blue" 
+            label={`${stats.notificacoesAtrasadas} sem retorno`}
+            onClick={() => onTabChange('notificacoes')}
+          />
+          <StatItem 
+            title="Ofícios" 
+            value={stats.totalOficios.toString()} 
+            icon={FileText} 
+            color="bg-slate-600" 
+            label="Expedições Registradas"
+            onClick={() => onTabChange('oficios')}
+          />
+          <StatItem 
+            title="Processos" 
+            value={stats.totalProcessos.toString()} 
+            icon={FolderOpen} 
+            color="bg-blue-600" 
+            label={`${stats.processosPendentes} em análise`}
+            onClick={() => onTabChange('processos')}
+          />
+        </div>
       </div>
     </div>
   );
@@ -201,22 +267,33 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
 function StatItem({ title, value, icon: Icon, color, label, onClick }: any) {
   return (
     <motion.div 
-      whileHover={{ y: -5 }}
+      whileHover={{ y: -5, scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
       onClick={onClick}
       className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-xl shadow-slate-200/40 flex flex-col justify-between gap-6 group hover:border-crb-blue/40 transition-all cursor-pointer h-full"
     >
-      <div className="flex items-center gap-4">
-        <div className={cn("p-4 rounded-2xl transition-transform group-hover:scale-110 shadow-lg text-white", color)}>
-          <Icon size={20} />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className={cn("p-4 rounded-2xl transition-transform group-hover:scale-110 shadow-lg text-white", color)}>
+            <Icon size={20} />
+          </div>
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] opacity-80">{title}</p>
         </div>
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] opacity-80">{title}</p>
+        <div className="text-crb-blue opacity-0 group-hover:opacity-100 transition-opacity">
+          <ListFilter size={16} />
+        </div>
       </div>
       <div>
         <p className="text-3xl font-serif font-black text-crb-navy tracking-tighter leading-tight truncate">{value}</p>
-        <p className="text-[10px] text-slate-500 font-bold mt-2 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
-          {label}
-        </p>
+        <div className="flex items-center justify-between mt-2">
+          <p className="text-[10px] text-slate-500 font-bold flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
+            {label}
+          </p>
+          <span className="text-[9px] font-black text-crb-blue uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-all">
+            Ver Detalhes
+          </span>
+        </div>
       </div>
     </motion.div>
   );
