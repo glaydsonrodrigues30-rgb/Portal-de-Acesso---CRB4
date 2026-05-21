@@ -71,7 +71,7 @@ export default function ProcessosView() {
         const statusData = Object.entries(statusMap)
           .map(([name, value]) => ({ 
             name, 
-            value,
+            value: value as number,
             percent: data.length > 0 ? ((value as number) / data.length * 100).toFixed(1) : 0
           }))
           .filter(i => i.value > 0);

@@ -64,7 +64,7 @@ export default function NegociacoesView() {
             if (n.proximaParcelaVencimento) {
               const vDate = new Date(n.proximaParcelaVencimento);
               if (vDate < today) emAtraso++;
-              else if (vDate.getTime() - today.getTime() < 7 * 86400000) proximasVencimento++;
+              else if (vDate.getTime() - today.getTime() < 7 * 86400000) proximosVencimento++;
             }
           }
         });

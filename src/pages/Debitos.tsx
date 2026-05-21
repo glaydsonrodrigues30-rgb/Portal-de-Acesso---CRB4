@@ -28,15 +28,21 @@ import {
   FileSpreadsheet,
   X,
   Save,
-  AlertTriangle
+  AlertTriangle,
+  Mail,
+  Shield,
+  Clock,
+  HelpCircle
 } from 'lucide-react';
 import { formatCurrency, formatDate, cn } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
+import { calculateFlow, parseDateSafely } from '../lib/flowEngine';
 
 export default function Debitos() {
   const { isAdmin, isOperacional } = useAuth();
   const [debitos, setDebitos] = useState<Debito[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastVisible, setLastVisible] = useState<any>(null);
   const [page, setPage] = useState(1);
@@ -50,7 +56,40 @@ export default function Debitos() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [tempNotifDate, setTempNotifDate] = useState('');
+  const [tempProtestoDate, setTempProtestoDate] = useState('');
+  const [tempCadinComunicacaoDate, setTempCadinComunicacaoDate] = useState('');
+  const [tempCadinDate, setTempCadinDate] = useState('');
+
+  const [filterFase, setFilterFase] = useState('');
+  const [filterPrazo, setFilterPrazo] = useState('');
+
+  useEffect(() => {
+    if (editingDebito) {
+      const todayString = new Date().toISOString().split('T')[0];
+      setTempNotifDate(editingDebito.dataNotificacao || todayString);
+      setTempProtestoDate(editingDebito.dataProtesto || todayString);
+      setTempCadinComunicacaoDate(editingDebito.dataComunicacaoCadin || todayString);
+      setTempCadinDate(editingDebito.dataCadin || todayString);
+    } else {
+      setTempNotifDate('');
+      setTempProtestoDate('');
+      setTempCadinComunicacaoDate('');
+      setTempCadinDate('');
+    }
+  }, [editingDebito]);
+
   const pageSize = 50;
+
+  const fetchNotifications = async () => {
+    try {
+      const snapshot = await getDocs(collection(db, 'notifications'));
+      const notifs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setNotifications(notifs);
+    } catch (err) {
+      console.error("Erro ao carregar notificações para fluxo:", err);
+    }
+  };
 
   const fetchDebitos = async () => {
     setLoading(true);
@@ -73,6 +112,7 @@ export default function Debitos() {
   };
 
   useEffect(() => {
+    fetchNotifications();
     fetchDebitos();
   }, []);
 
@@ -94,7 +134,15 @@ export default function Debitos() {
         dataVencimento: editingDebito.dataVencimento || new Date().toISOString(),
         statusGeral: editingDebito.statusGeral || 'Pendente',
         observacoes: editingDebito.observacoes || '',
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        notificacaoEnviada: editingDebito.notificacaoEnviada || false,
+        dataNotificacao: editingDebito.dataNotificacao || null,
+        protestoEnviado: editingDebito.protestoEnviado || false,
+        dataProtesto: editingDebito.dataProtesto || null,
+        cadinComunicado: editingDebito.cadinComunicado || false,
+        dataComunicacaoCadin: editingDebito.dataComunicacaoCadin || null,
+        cadinIncluido: editingDebito.cadinIncluido || false,
+        dataCadin: editingDebito.dataCadin || null
       };
 
       if (editingDebito.id) {
@@ -120,10 +168,16 @@ export default function Debitos() {
 
   const filteredData = debitos.filter(d => {
     const search = searchTerm.toLowerCase();
-    const matchesNome = d.nome.toLowerCase().includes(search);
-    const matchesCRB = d.crb.toLowerCase().includes(search) || d.crb.toLowerCase().includes(searchCRB.toLowerCase());
+    const matchesSearch = search ? (d.nome.toLowerCase().includes(search) || d.crb.toLowerCase().includes(search)) : true;
+    const matchesCRB = searchCRB ? d.crb.toLowerCase().includes(searchCRB.toLowerCase()) : true;
     const matchesAno = searchAno ? d.ano.toString() === searchAno : true;
-    return (matchesNome || matchesCRB) && matchesAno;
+
+    // Calculate flow dynamically for filter check
+    const flow = (filterFase || filterPrazo) ? calculateFlow(d, notifications) : null;
+    const matchesFase = filterFase ? flow?.faseAtual === filterFase : true;
+    const matchesPrazo = filterPrazo ? flow?.status === filterPrazo : true;
+
+    return matchesSearch && matchesCRB && matchesAno && matchesFase && matchesPrazo;
   });
 
   return (
@@ -298,6 +352,394 @@ export default function Debitos() {
                   </div>
                 </div>
 
+                {editingDebito && editingDebito.id && (() => {
+                  const flowObj = calculateFlow(editingDebito as any, notifications);
+                  const todayStr = new Date().toISOString().split('T')[0];
+
+                  const diasRestantesProtesto = (() => {
+                    if (!editingDebito.protestoEnviado || !editingDebito.dataProtesto) return 0;
+                    const protDate = parseDateSafely(editingDebito.dataProtesto);
+                    if (!protDate) return 0;
+                    const daysPassed = Math.floor((new Date().getTime() - protDate.getTime()) / (1000 * 60 * 60 * 24));
+                    return Math.max(0, 180 - daysPassed);
+                  })();
+
+                  const diasRestantesComunicacao = (() => {
+                    if (!editingDebito.cadinComunicado || !editingDebito.dataComunicacaoCadin) return 0;
+                    const comDate = parseDateSafely(editingDebito.dataComunicacaoCadin);
+                    if (!comDate) return 0;
+                    const daysPassed = Math.floor((new Date().getTime() - comDate.getTime()) / (1000 * 60 * 60 * 24));
+                    return Math.max(0, 75 - daysPassed);
+                  })();
+
+                  return (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-6 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Acompanhamento do Fluxo de Cobrança</span>
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                          flowObj.status === 'Concluído' 
+                             ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                             : flowObj.status === 'Vencido'
+                               ? "bg-red-100 text-red-800 border border-red-200"
+                               : "bg-blue-100 text-blue-800 border border-blue-200"
+                        )}>
+                          {flowObj.status}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Fase Atual</span>
+                          <span className="text-sm font-sans font-extrabold text-crb-navy mt-0.5 block">{flowObj.faseAtual}</span>
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Início da Fase</span>
+                          <span className="text-sm font-bold text-slate-600 mt-0.5 block">
+                            {flowObj.dataInicioFase ? flowObj.dataInicioFase.split('-').reverse().join('/') : 'S/A'}
+                          </span>
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Prazo Final</span>
+                          <span className="text-sm font-bold text-slate-600 mt-0.5 block">
+                            {flowObj.prazoFinal ? flowObj.prazoFinal.split('-').reverse().join('/') : 'S/A'}
+                          </span>
+                        </div>
+                        <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Dias / Situação</span>
+                          <span className={cn(
+                            "text-sm font-extrabold mt-0.5 block",
+                            flowObj.status === 'Vencido' ? "text-red-600" : "text-emerald-600"
+                          )}>
+                            {flowObj.status === 'Vencido' ? `Atraso: ${flowObj.atrasoDias}d` : `${flowObj.diasRestantes}d rest.`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Manual Institutional Actions Container */}
+                      <div className="border-t border-slate-200 pt-4 space-y-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-[#1e3a8a]">
+                            Gestão de Cobrança Institucional (Eventos Manuais)
+                          </span>
+                          <span className="text-[11px] text-slate-400 font-medium">
+                            Registre e gerencie as fases regulamentares sem automação indevida.
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                          
+                          {/* 1. NOTIFICACAO */}
+                          <div className={cn(
+                            "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
+                            editingDebito.notificacaoEnviada ? "border-emerald-200 bg-emerald-50/5" : "border-slate-100"
+                          )}>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <Mail size={14} className={editingDebito.notificacaoEnviada ? "text-emerald-600" : "text-slate-400"} />
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                                  1. Notificação
+                                </span>
+                              </div>
+                              {editingDebito.notificacaoEnviada ? (
+                                <div className="mt-2">
+                                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100/60 px-2.5 py-1 rounded-md inline-block">
+                                    Notificado em: {editingDebito.dataNotificacao ? editingDebito.dataNotificacao.split('-').reverse().join('/') : 'S/A'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
+                                  Aguardando envio oficial da notificação de débito (30 dias).
+                                </p>
+                              )}
+                            </div>
+
+                            {!isReadOnly && (
+                              <div className="pt-1">
+                                {editingDebito.notificacaoEnviada ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingDebito({
+                                        ...editingDebito,
+                                        notificacaoEnviada: false,
+                                        dataNotificacao: null,
+                                        protestoEnviado: false,
+                                        dataProtesto: null,
+                                        cadinComunicado: false,
+                                        dataComunicacaoCadin: null,
+                                        cadinIncluido: false,
+                                        dataCadin: null
+                                      });
+                                    }}
+                                    className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
+                                  >
+                                    ✕ Remover Notif.
+                                  </button>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <input 
+                                      type="date"
+                                      value={tempNotifDate}
+                                      onChange={(e) => setTempNotifDate(e.target.value)}
+                                      className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingDebito({
+                                          ...editingDebito,
+                                          notificacaoEnviada: true,
+                                          dataNotificacao: tempNotifDate || todayStr
+                                        });
+                                      }}
+                                      className="w-full text-[10px] text-white bg-crb-navy hover:bg-[#112455] py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors"
+                                    >
+                                      ✓ Registrar Notif.
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 2. PROTESTO */}
+                          <div className={cn(
+                            "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
+                            editingDebito.protestoEnviado ? "border-purple-200 bg-purple-50/5" : "border-slate-100",
+                            (!editingDebito.notificacaoEnviada && !isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
+                          )}>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <Shield size={14} className={editingDebito.protestoEnviado ? "text-purple-600" : "text-slate-400"} />
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                                  2. Protesto
+                                </span>
+                              </div>
+                              {editingDebito.protestoEnviado ? (
+                                <div className="mt-2">
+                                  <span className="text-xs font-bold text-purple-700 bg-purple-100/60 px-2.5 py-1 rounded-md inline-block">
+                                    Protestado em: {editingDebito.dataProtesto ? editingDebito.dataProtesto.split('-').reverse().join('/') : 'S/A'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
+                                  Requer notificação prévia. Envia débito ao cartório por 180 dias.
+                                </p>
+                              )}
+                            </div>
+
+                            {!isReadOnly && (
+                              <div className="pt-1">
+                                {editingDebito.protestoEnviado ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingDebito({
+                                        ...editingDebito,
+                                        protestoEnviado: false,
+                                        dataProtesto: null,
+                                        cadinComunicado: false,
+                                        dataComunicacaoCadin: null,
+                                        cadinIncluido: false,
+                                        dataCadin: null
+                                      });
+                                    }}
+                                    className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
+                                  >
+                                    ✕ Remover Protesto
+                                  </button>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <input 
+                                      type="date"
+                                      disabled={!editingDebito.notificacaoEnviada}
+                                      value={tempProtestoDate}
+                                      onChange={(e) => setTempProtestoDate(e.target.value)}
+                                      className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={!editingDebito.notificacaoEnviada}
+                                      onClick={() => {
+                                        setEditingDebito({
+                                          ...editingDebito,
+                                          protestoEnviado: true,
+                                          dataProtesto: tempProtestoDate || todayStr
+                                        });
+                                      }}
+                                      title={!editingDebito.notificacaoEnviada ? "Protesto só permitido após notificação" : "Enviar débito para protesto em cartório"}
+                                      className="w-full text-[10px] text-white bg-crb-navy hover:bg-[#112455] py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                                    >
+                                      ✓ Registrar Protesto
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. COMUNICAÇÃO CADIN */}
+                          <div className={cn(
+                            "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
+                            editingDebito.cadinComunicado ? "border-indigo-200 bg-indigo-50/5" : "border-slate-100",
+                            (!editingDebito.protestoEnviado && !isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
+                          )}>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <Clock size={14} className={editingDebito.cadinComunicado ? "text-indigo-600" : "text-slate-400"} />
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                                  3. Comunicação CADIN
+                                </span>
+                              </div>
+                              {editingDebito.cadinComunicado ? (
+                                <div className="mt-2">
+                                  <span className="text-xs font-bold text-indigo-700 bg-indigo-100/60 px-2.5 py-1 rounded-md inline-block">
+                                    Comunicado em: {editingDebito.dataComunicacaoCadin ? editingDebito.dataComunicacaoCadin.split('-').reverse().join('/') : 'S/A'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
+                                  {editingDebito.protestoEnviado && diasRestantesProtesto > 0 ? (
+                                    `Libera em: ${diasRestantesProtesto} dias (requer 180 dias de protesto).`
+                                  ) : (
+                                    "Comunicação que inicia o prazo de 75 dias para inclusão no CADIN."
+                                  )}
+                                </p>
+                              )}
+                            </div>
+
+                            {!isReadOnly && (
+                              <div className="pt-1">
+                                {editingDebito.cadinComunicado ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingDebito({
+                                        ...editingDebito,
+                                        cadinComunicado: false,
+                                        dataComunicacaoCadin: null,
+                                        cadinIncluido: false,
+                                        dataCadin: null
+                                      });
+                                    }}
+                                    className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
+                                  >
+                                    ✕ Remover Comunicação
+                                  </button>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <input 
+                                      type="date"
+                                      disabled={!editingDebito.protestoEnviado || diasRestantesProtesto > 0}
+                                      value={tempCadinComunicacaoDate}
+                                      onChange={(e) => setTempCadinComunicacaoDate(e.target.value)}
+                                      className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={!editingDebito.protestoEnviado || diasRestantesProtesto > 0}
+                                      onClick={() => {
+                                        setEditingDebito({
+                                          ...editingDebito,
+                                          cadinComunicado: true,
+                                          dataComunicacaoCadin: tempCadinComunicacaoDate || todayStr
+                                        });
+                                      }}
+                                      title={!editingDebito.protestoEnviado ? "Comunicação CADIN só permitida após protesto" : diasRestantesProtesto > 0 ? `Aguardando completar 180 dias de protesto (${diasRestantesProtesto} dias restantes)` : "Registrar comunicação prévia ao devedor"}
+                                      className="w-full text-[10px] text-white bg-crb-navy hover:bg-[#112455] py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                                    >
+                                      ✓ Comunicar CADIN
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 4. CADIN */}
+                          <div className={cn(
+                            "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
+                            editingDebito.cadinIncluido ? "border-red-200 bg-red-50/5" : "border-slate-100",
+                            (!editingDebito.cadinComunicado || diasRestantesComunicacao > 0 || isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
+                          )}>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <AlertTriangle size={14} className={editingDebito.cadinIncluido ? "text-red-600" : "text-slate-400"} />
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                                  4. CADIN
+                                </span>
+                              </div>
+                              {editingDebito.cadinIncluido ? (
+                                <div className="mt-2">
+                                  <span className="text-xs font-bold text-red-700 bg-red-100/60 px-2.5 py-1 rounded-md inline-block">
+                                    Incluso em: {editingDebito.dataCadin ? editingDebito.dataCadin.split('-').reverse().join('/') : 'S/A'}
+                                  </span>
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
+                                  {editingDebito.cadinComunicado && diasRestantesComunicacao > 0 ? (
+                                    `Libera em: ${diasRestantesComunicacao} dias (requer 75 dias de comunicação).`
+                                  ) : (
+                                    "Inclusão efetiva no CADIN após 75 dias de comunicação prévia."
+                                  )}
+                                </p>
+                              )}
+                            </div>
+
+                            {!isReadOnly && (
+                              <div className="pt-1">
+                                {editingDebito.cadinIncluido ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingDebito({
+                                        ...editingDebito,
+                                        cadinIncluido: false,
+                                        dataCadin: null
+                                      });
+                                    }}
+                                    className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
+                                  >
+                                    ✕ Remover do CADIN
+                                  </button>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <input 
+                                      type="date"
+                                      disabled={!editingDebito.cadinComunicado || diasRestantesComunicacao > 0}
+                                      value={tempCadinDate}
+                                      onChange={(e) => setTempCadinDate(e.target.value)}
+                                      className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={!editingDebito.cadinComunicado || diasRestantesComunicacao > 0}
+                                      onClick={() => {
+                                        setEditingDebito({
+                                          ...editingDebito,
+                                          cadinIncluido: true,
+                                          dataCadin: tempCadinDate || todayStr
+                                        });
+                                      }}
+                                      title={!editingDebito.cadinComunicado ? "CADIN só permitido após comunicação prévia" : diasRestantesComunicacao > 0 ? `Aguardando completar 75 dias de comunicação (${diasRestantesComunicacao} dias restantes)` : "Incluir registro de forma externa no CADIN"}
+                                      className="w-full text-[10px] text-white bg-crb-navy hover:bg-[#112455] py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                                    >
+                                      ✓ Registrar CADIN
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                        </div>
+                      </div>
+
+                    </div>
+                  );
+                })()}
+
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Observações Internas</label>
                   <textarea 
@@ -369,7 +811,7 @@ export default function Debitos() {
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="overflow-hidden grid grid-cols-1 md:grid-cols-3 gap-6 pt-6 border-t border-slate-100"
+              className="overflow-hidden grid grid-cols-1 md:grid-cols-4 gap-6 pt-6 border-t border-slate-100"
             >
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Número do CRB</label>
@@ -391,6 +833,35 @@ export default function Debitos() {
                   placeholder="2024"
                 />
               </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fase do Fluxo</label>
+                <select
+                  value={filterFase}
+                  onChange={(e) => setFilterFase(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-slate-200 bg-white rounded-xl outline-none focus:ring-2 focus:ring-crb-purple focus:border-crb-navy transition-all font-bold text-xs text-crb-navy"
+                >
+                  <option value="">Todas as Fases</option>
+                  <option value="Aguardando Notificação">Aguardando Notificação</option>
+                  <option value="Notificação">Notificação</option>
+                  <option value="Protesto">Protesto</option>
+                  <option value="Comunicação CADIN">Comunicação CADIN</option>
+                  <option value="Aguardando inclusão CADIN">Aguardando inclusão CADIN</option>
+                  <option value="CADIN">CADIN</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Situação do Prazo</label>
+                <select
+                  value={filterPrazo}
+                  onChange={(e) => setFilterPrazo(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-slate-200 bg-white rounded-xl outline-none focus:ring-2 focus:ring-crb-purple focus:border-crb-navy transition-all font-bold text-xs text-crb-navy"
+                >
+                  <option value="">Todas</option>
+                  <option value="Em prazo">No Prazo</option>
+                  <option value="Vencido">Em Atraso / Vencido</option>
+                  <option value="Concluído">Concluído</option>
+                </select>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -405,7 +876,8 @@ export default function Debitos() {
                 <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">CRB</th>
                 <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Nome/Razão Social</th>
                 <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Exercício</th>
-                <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Valor Original</th>
+                <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Fase do Fluxo</th>
+                <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Status do Prazo</th>
                 <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Valor Corrigido</th>
                 <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Situação</th>
                 <th className="px-8 py-5 text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 text-right">Ações</th>
@@ -414,7 +886,7 @@ export default function Debitos() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-8 py-20 text-center">
+                  <td colSpan={8} className="px-8 py-20 text-center">
                     <div className="flex flex-col items-center gap-3">
                       <div className="w-10 h-10 border-4 border-crb-navy border-t-crb-purple rounded-full animate-spin"></div>
                       <span className="text-sm font-bold text-slate-400 uppercase tracking-widest font-sans">Sincronizando com Base de Dados...</span>
@@ -423,7 +895,7 @@ export default function Debitos() {
                 </tr>
               ) : filteredData.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-8 py-20 text-center">
+                  <td colSpan={8} className="px-8 py-20 text-center">
                     <div className="flex flex-col items-center gap-2">
                        <Search size={40} className="text-slate-200 mb-2" />
                        <span className="text-lg font-serif font-bold text-slate-400">Nenhum registro encontrado</span>
@@ -432,26 +904,51 @@ export default function Debitos() {
                   </td>
                 </tr>
               ) : (
-                filteredData.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
-                    <td className="px-8 py-5 text-sm font-bold text-crb-navy">{item.crb}</td>
-                    <td className="px-8 py-5 text-sm text-slate-700 font-bold uppercase tracking-tight">{item.nome}</td>
-                    <td className="px-8 py-5">
-                      <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs font-bold">{item.ano}</span>
-                    </td>
-                    <td className="px-8 py-5 text-sm text-slate-500 font-medium">{formatCurrency(item.valorOriginal || item.valor)}</td>
-                    <td className="px-8 py-5 text-sm font-serif font-bold text-crb-navy">{formatCurrency(item.valorCorrigido || item.valor)}</td>
-                    <td className="px-8 py-5">
-                      <span className={cn(
-                        "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border shadow-sm",
-                        item.statusGeral?.includes('Pago') 
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
-                          : "bg-blue-50 text-blue-700 border-blue-200"
-                      )}>
-                        {item.statusGeral || 'Pendente'}
-                      </span>
-                    </td>
-                    <td className="px-8 py-5 text-right">
+                filteredData.map((item) => {
+                  const flow = calculateFlow(item, notifications);
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
+                      <td className="px-8 py-5 text-sm font-bold text-crb-navy">{item.crb}</td>
+                      <td className="px-8 py-5 text-sm text-slate-700 font-bold uppercase tracking-tight">{item.nome}</td>
+                      <td className="px-8 py-5">
+                        <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs font-bold">{item.ano}</span>
+                      </td>
+                      <td className="px-8 py-5">
+                        <span className="font-serif font-black text-crb-navy text-xs">{flow.faseAtual}</span>
+                      </td>
+                      <td className="px-8 py-5">
+                        <div className="flex flex-col gap-1">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider w-fit border",
+                            flow.status === 'Concluído' 
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                              : flow.status === 'Vencido' 
+                                ? "bg-red-50 text-red-700 border-red-200" 
+                                : flow.status === 'Em prazo' && flow.diasRestantes <= 7
+                                  ? "bg-amber-50 text-amber-700 border-amber-200 animate-pulse"
+                                  : "bg-blue-50 text-blue-700 border-blue-200"
+                          )}>
+                            {flow.status}
+                          </span>
+                          {flow.status !== 'Concluído' && (
+                            <span className="text-[10px] text-slate-400 font-bold">
+                              {flow.status === 'Vencido' ? `Atraso: ${flow.atrasoDias}d` : `${flow.diasRestantes}d rest.`}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-8 py-5 text-sm font-serif font-bold text-crb-navy">{formatCurrency(item.valorCorrigido || item.valor)}</td>
+                      <td className="px-8 py-5">
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border shadow-sm",
+                          item.statusGeral?.includes('Pago') 
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                            : "bg-blue-50 text-blue-700 border-blue-200"
+                        )}>
+                          {item.statusGeral || 'Pendente'}
+                        </span>
+                      </td>
+                      <td className="px-8 py-5 text-right">
                       {isAdmin && (
                         <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-4 group-hover:translate-x-0">
                           <button 
@@ -509,7 +1006,8 @@ export default function Debitos() {
                       )}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

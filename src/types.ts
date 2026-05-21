@@ -25,6 +25,14 @@ export interface Debito {
   indiceCorrecao?: string;
   statusGeral: string;
   updatedAt: string;
+  notificacaoEnviada?: boolean;
+  dataNotificacao?: string | null;
+  protestoEnviado?: boolean;
+  dataProtesto?: string | null;
+  cadinComunicado?: boolean;
+  dataComunicacaoCadin?: string | null;
+  cadinIncluido?: boolean;
+  dataCadin?: string | null;
 }
 
 export interface Notificacao {
