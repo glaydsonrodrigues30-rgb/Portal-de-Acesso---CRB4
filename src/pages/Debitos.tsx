@@ -38,9 +38,11 @@ import { formatCurrency, formatDate, cn } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { calculateFlow, parseDateSafely } from '../lib/flowEngine';
+import TaskPanel from '../components/TaskPanel';
 
 export default function Debitos() {
   const { isAdmin, isOperacional } = useAuth();
+  const [activeView, setActiveView] = useState<'lista' | 'tarefas'>('lista');
   const [debitos, setDebitos] = useState<Debito[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -204,6 +206,32 @@ export default function Debitos() {
         </div>
       </div>
 
+      {/* Toggles de Visualização */}
+      <div className="flex bg-slate-200/50 p-1 rounded-2xl gap-1 w-fit border border-slate-200 shadow-xs">
+        <button
+          onClick={() => setActiveView('lista')}
+          className={cn(
+            "flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all uppercase tracking-wider",
+            activeView === 'lista'
+              ? "bg-white text-crb-navy shadow-xs ring-1 ring-slate-100"
+              : "text-slate-500 hover:text-crb-navy"
+          )}
+        >
+          Lista Geral de Débitos
+        </button>
+        <button
+          onClick={() => setActiveView('tarefas')}
+          className={cn(
+            "flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-bold transition-all uppercase tracking-wider",
+            activeView === 'tarefas'
+              ? "bg-white text-crb-navy shadow-xs ring-1 ring-slate-100"
+              : "text-slate-500 hover:text-crb-navy"
+          )}
+        >
+          Painel de Tarefas de Cobrança
+        </button>
+      </div>
+
       {/* Modal de Débito */}
       <AnimatePresence>
         {isModalOpen && (
@@ -212,9 +240,9 @@ export default function Debitos() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden border border-white/20"
+              className="bg-white w-full max-w-2xl max-h-[85vh] rounded-3xl shadow-2xl overflow-hidden border border-white/20 flex flex-col"
             >
-              <div className="bg-crb-navy p-6 flex justify-between items-center bg-gradient-to-r from-crb-navy to-crb-purple">
+              <div className="bg-crb-navy p-6 flex justify-between items-center bg-gradient-to-r from-crb-navy to-crb-purple shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-white/10 rounded-xl">
                     {isReadOnly ? <Eye size={24} className="text-white" /> : <Plus size={24} className="text-white" />}
@@ -228,76 +256,77 @@ export default function Debitos() {
                 </button>
               </div>
 
-              <form onSubmit={handleSave} className="p-8 space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">CRB do Profissional/Empresa</label>
-                    <input 
-                      required
-                      type="text"
-                      disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                      placeholder="Ex: PE-00000"
-                      value={editingDebito?.crb || ''}
-                      onChange={(e) => setEditingDebito({...editingDebito!, crb: e.target.value})}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome Completo / Razão Social</label>
-                    <input 
-                      required
-                      type="text"
-                      disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy uppercase disabled:opacity-70"
-                      placeholder="NOME DO PROFISSIONAL"
-                      value={editingDebito?.nome || ''}
-                      onChange={(e) => setEditingDebito({...editingDebito!, nome: e.target.value})}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Ano do Exercício</label>
-                    <input 
-                      required
-                      type="number"
-                      disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                      placeholder="2024"
-                      value={editingDebito?.ano || ''}
-                      onChange={(e) => setEditingDebito({...editingDebito!, ano: Number(e.target.value)})}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Débito</label>
-                    <select 
-                      disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                      value={editingDebito?.nomeDebito || 'Anuidade'}
-                      onChange={(e) => setEditingDebito({...editingDebito!, nomeDebito: e.target.value})}
-                    >
-                      <option value="Anuidade">Anuidade PF</option>
-                      <option value="Anuidade PJ">Anuidade PJ</option>
-                      <option value="Multa">Multa Eleitoral / Disciplinar</option>
-                      <option value="Taxa">Taxas Diversas</option>
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
+              <form onSubmit={handleSave} className="flex-1 min-h-0 flex flex-col">
+                <div className="p-8 space-y-6 overflow-y-auto flex-1">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Valor Original (R$)</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">CRB do Profissional/Empresa</label>
                       <input 
                         required
-                        type="number"
-                        step="0.01"
+                        type="text"
                         disabled={isReadOnly}
                         className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                        placeholder="0.00"
-                        value={editingDebito?.valor || ''}
-                        onChange={(e) => setEditingDebito({...editingDebito!, valor: Number(e.target.value)})}
+                        placeholder="Ex: PE-00000"
+                        value={editingDebito?.crb || ''}
+                        onChange={(e) => setEditingDebito({...editingDebito!, crb: e.target.value})}
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Valor Corrigido (R$)</label>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome Completo / Razão Social</label>
+                      <input 
+                        required
+                        type="text"
+                        disabled={isReadOnly}
+                        className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy uppercase disabled:opacity-70"
+                        placeholder="NOME DO PROFISSIONAL"
+                        value={editingDebito?.nome || ''}
+                        onChange={(e) => setEditingDebito({...editingDebito!, nome: e.target.value})}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Ano do Exercício</label>
+                      <input 
+                        required
+                        type="number"
+                        disabled={isReadOnly}
+                        className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
+                        placeholder="2024"
+                        value={editingDebito?.ano || ''}
+                        onChange={(e) => setEditingDebito({...editingDebito!, ano: Number(e.target.value)})}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Débito</label>
+                      <select 
+                        disabled={isReadOnly}
+                        className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
+                        value={editingDebito?.nomeDebito || 'Anuidade'}
+                        onChange={(e) => setEditingDebito({...editingDebito!, nomeDebito: e.target.value})}
+                      >
+                        <option value="Anuidade">Anuidade PF</option>
+                        <option value="Anuidade PJ">Anuidade PJ</option>
+                        <option value="Multa">Multa Eleitoral / Disciplinar</option>
+                        <option value="Taxa">Taxas Diversas</option>
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Valor Original (R$)</label>
+                        <input 
+                          required
+                          type="number"
+                          step="0.01"
+                          disabled={isReadOnly}
+                          className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
+                          placeholder="0.00"
+                          value={editingDebito?.valor || ''}
+                          onChange={(e) => setEditingDebito({...editingDebito!, valor: Number(e.target.value)})}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Valor Corrigido (R$)</label>
                       <input 
                         required
                         type="number"
@@ -751,11 +780,13 @@ export default function Debitos() {
                   ></textarea>
                 </div>
 
-                <div className="flex gap-4 pt-4">
+                </div>
+
+                <div className="p-6 md:px-8 bg-slate-50 border-t border-slate-200 flex gap-4 shrink-0">
                   <button 
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="flex-1 px-6 py-4 border-2 border-slate-100 text-slate-400 font-bold rounded-2xl hover:bg-slate-50 transition-all uppercase tracking-widest text-xs"
+                    className="flex-1 px-6 py-4 border-2 border-slate-200 text-slate-600 bg-white font-bold rounded-2xl hover:bg-slate-50 transition-all uppercase tracking-widest text-xs"
                   >
                     {isReadOnly ? 'Fechar' : 'Cancelar'}
                   </button>
@@ -780,8 +811,10 @@ export default function Debitos() {
         )}
       </AnimatePresence>
 
-      {/* Filters */}
-      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+      {activeView === 'lista' ? (
+        <>
+          {/* Filters */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
         <div className="flex flex-col md:flex-row gap-4">
           <div className="relative flex-1 group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-crb-navy transition-colors" size={20} />
@@ -1031,6 +1064,24 @@ export default function Debitos() {
           </div>
         </div>
       </div>
+      </>
+      ) : (
+        <TaskPanel
+          debitos={debitos}
+          notifications={notifications}
+          onRefresh={fetchDebitos}
+          onViewDetails={(debito) => {
+            setEditingDebito(debito);
+            setIsReadOnly(true);
+            setIsModalOpen(true);
+          }}
+          onEditDetails={(debito) => {
+            setEditingDebito(debito);
+            setIsReadOnly(false);
+            setIsModalOpen(true);
+          }}
+        />
+      )}
     </div>
   );
 }
