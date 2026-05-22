@@ -26,12 +26,12 @@ import {
   Eye,
   Settings
 } from 'lucide-react';
-import { formatDate, cn } from '../lib/utils';
+import { formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function Oficios() {
-  const { isAdmin, isOperacional } = useAuth();
+  const { userData, isAdmin, isOperacional } = useAuth();
   const [oficios, setOficios] = useState<Oficio[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -42,6 +42,54 @@ export default function Oficios() {
   const [editingOficio, setEditingOficio] = useState<Partial<Oficio> | null>(null);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const handleOficioFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const filesArray = Array.from(e.target.files) as File[];
+    
+    filesArray.forEach((file: File) => {
+      if (file.size > 1024 * 1024) {
+        alert(`O arquivo "${file.name}" excede o limite de 1MB recomendado.`);
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64Data = event.target?.result as string;
+        const novoAnexo = {
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          nome: file.name,
+          base64: base64Data,
+          tamanho: file.size,
+          tipo: file.type,
+          dataUpload: new Date().toISOString(),
+          usuarioUpload: userData?.nome || userData?.email || 'Usuário'
+        };
+        
+        setEditingOficio(prev => {
+          if (!prev) return prev;
+          const currentAnexos = prev.anexos || [];
+          return {
+            ...prev,
+            anexos: [...currentAnexos, novoAnexo]
+          };
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const removeOficioAnexo = (id: string) => {
+    setEditingOficio(prev => {
+      if (!prev) return prev;
+      const currentAnexos = prev.anexos || [];
+      return {
+        ...prev,
+        anexos: currentAnexos.filter(anexo => anexo.id !== id)
+      };
+    });
+  };
 
   const fetchOficios = async () => {
     setLoading(true);
@@ -378,6 +426,63 @@ export default function Oficios() {
                     value={editingOficio?.observacao || ''}
                     onChange={(e) => setEditingOficio({...editingOficio!, observacao: e.target.value})}
                   />
+                </div>
+
+                <div className="space-y-4 border-t border-slate-100 pt-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Documentos em Anexo</label>
+                    {!isReadOnly && (
+                      <label className="flex items-center gap-1.5 bg-crb-navy/5 text-crb-navy hover:bg-crb-navy hover:text-white px-3 py-1.5 rounded-xl cursor-pointer transition-all text-xs font-bold">
+                        <Plus size={14} />
+                        Anexar Arquivo
+                        <input 
+                          type="file" 
+                          multiple 
+                          className="hidden" 
+                          onChange={handleOficioFileUpload} 
+                        />
+                      </label>
+                    )}
+                  </div>
+                  
+                  {editingOficio?.anexos && editingOficio.anexos.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-1">
+                      {editingOficio.anexos.map((file) => (
+                        <div key={file.id} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-100 rounded-xl text-xs">
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-bold text-slate-700 truncate" title={file.nome}>
+                              {file.nome}
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-medium">
+                              {new Date(file.dataUpload).toLocaleDateString('pt-BR')} por {file.usuarioUpload}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0 ml-2">
+                            <button
+                              type="button"
+                              onClick={() => openAttachment(file)}
+                              className="p-1.5 text-slate-500 hover:text-white hover:bg-crb-navy rounded-lg transition-all"
+                              title="Visualizar documento"
+                            >
+                              <Eye size={14} />
+                            </button>
+                            {!isReadOnly && (
+                              <button
+                                type="button"
+                                onClick={() => removeOficioAnexo(file.id)}
+                                className="p-1.5 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all"
+                                title="Excluir documento"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 italic">Nenhum documento anexado a este ofício.</p>
+                  )}
                 </div>
 
                 <div className="flex gap-4 pt-4">

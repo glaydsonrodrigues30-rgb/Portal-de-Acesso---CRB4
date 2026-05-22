@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type DashboardTab = 'geral' | 'debitos' | 'notificacoes' | 'negociacoes' | 'oficios' | 'processos';
+type DashboardTab = 'geral' | 'debitos' | 'negociacoes' | 'oficios' | 'processos';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('geral');
@@ -22,7 +22,6 @@ export default function Dashboard() {
   const tabs = [
     { id: 'geral', label: 'Geral', icon: BarChart3, color: 'text-crb-navy' },
     { id: 'debitos', label: 'Débitos', icon: CreditCard, color: 'text-emerald-600' },
-    { id: 'notificacoes', label: 'Notificações', icon: Mail, color: 'text-crb-blue' },
     { id: 'negociacoes', label: 'Negociações', icon: Handshake, color: 'text-crb-purple' },
     { id: 'oficios', label: 'Ofícios Expedidos', icon: FileText, color: 'text-slate-600' },
     { id: 'processos', label: 'Processos', icon: FolderOpen, color: 'text-crb-blue' },
@@ -32,7 +31,6 @@ export default function Dashboard() {
     switch (activeTab) {
       case 'geral': return <SummaryView onTabChange={goToTab} />;
       case 'debitos': return <DebitosView />;
-      case 'notificacoes': return <NotificacoesView />;
       case 'negociacoes': return <NegociacoesView />;
       case 'oficios': return <OficiosView />;
       case 'processos': return <ProcessosView />;

@@ -12,6 +12,16 @@ export interface User {
   createdAt: string;
 }
 
+export interface ArquivoAnexo {
+  id: string;
+  nome: string;
+  base64: string;
+  tamanho: number;
+  tipo: string;
+  dataUpload: string;
+  usuarioUpload: string;
+}
+
 export interface Debito {
   id: string;
   crb: string;
@@ -27,12 +37,22 @@ export interface Debito {
   updatedAt: string;
   notificacaoEnviada?: boolean;
   dataNotificacao?: string | null;
+  notificacaoResponsavel?: string | null;
   protestoEnviado?: boolean;
   dataProtesto?: string | null;
+  protestoResponsavel?: string | null;
   cadinComunicado?: boolean;
   dataComunicacaoCadin?: string | null;
+  comunicacaoCadinResponsavel?: string | null;
   cadinIncluido?: boolean;
   dataCadin?: string | null;
+  cadinResponsavel?: string | null;
+  anexos?: {
+    notificacao?: ArquivoAnexo[];
+    protesto?: ArquivoAnexo[];
+    comunicacaoCadin?: ArquivoAnexo[];
+    cadin?: ArquivoAnexo[];
+  };
 }
 
 export interface Notificacao {
@@ -77,6 +97,7 @@ export interface Oficio {
   ano?: number;
   updatedAt?: string;
   createdAt?: string;
+  anexos?: ArquivoAnexo[];
 }
 
 export interface Processo {
@@ -95,6 +116,7 @@ export interface Processo {
   ano?: number;
   updatedAt?: string;
   createdAt?: string;
+  anexos?: ArquivoAnexo[];
 }
 
 export interface AuditoriaLog {

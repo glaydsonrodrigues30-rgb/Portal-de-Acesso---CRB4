@@ -240,7 +240,7 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
             icon={Mail} 
             color="bg-crb-blue" 
             label={`${stats.notificacoesAtrasadas} sem retorno`}
-            onClick={() => onTabChange('notificacoes')}
+            onClick={() => onTabChange('debitos')}
           />
           <StatItem 
             title="Ofícios" 

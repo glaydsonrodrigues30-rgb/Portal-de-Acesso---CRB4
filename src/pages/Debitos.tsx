@@ -32,16 +32,23 @@ import {
   Mail,
   Shield,
   Clock,
-  HelpCircle
+  HelpCircle,
+  FileText,
+  CheckCircle2,
+  History,
+  Paperclip,
+  Calendar,
+  User,
+  File
 } from 'lucide-react';
-import { formatCurrency, formatDate, cn } from '../lib/utils';
+import { formatCurrency, formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { calculateFlow, parseDateSafely } from '../lib/flowEngine';
 import TaskPanel from '../components/TaskPanel';
 
 export default function Debitos() {
-  const { isAdmin, isOperacional } = useAuth();
+  const { userData, isAdmin, isOperacional } = useAuth();
   const [activeView, setActiveView] = useState<'lista' | 'tarefas'>('lista');
   const [debitos, setDebitos] = useState<Debito[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -62,9 +69,66 @@ export default function Debitos() {
   const [tempProtestoDate, setTempProtestoDate] = useState('');
   const [tempCadinComunicacaoDate, setTempCadinComunicacaoDate] = useState('');
   const [tempCadinDate, setTempCadinDate] = useState('');
+  const [modalTab, setModalTab] = useState<'timeline' | 'anexos'>('timeline');
 
   const [filterFase, setFilterFase] = useState('');
   const [filterPrazo, setFilterPrazo] = useState('');
+
+  const handleStageFileUpload = (e: React.ChangeEvent<HTMLInputElement>, stage: 'notificacao' | 'protesto' | 'comunicacaoCadin' | 'cadin') => {
+    if (!e.target.files) return;
+    const filesArray = Array.from(e.target.files) as File[];
+    
+    filesArray.forEach((file: File) => {
+      if (file.size > 1024 * 1024) {
+        alert(`O arquivo "${file.name}" excede o limite de 1MB recomendado.`);
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const base64Data = event.target?.result as string;
+        const novoAnexo = {
+          id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
+          nome: file.name,
+          base64: base64Data,
+          tamanho: file.size,
+          tipo: file.type,
+          dataUpload: new Date().toISOString(),
+          usuarioUpload: userData?.nome || userData?.email || 'Usuário'
+        };
+        
+        setEditingDebito(prev => {
+          if (!prev) return prev;
+          const currentAnexos = prev.anexos || {};
+          const stageAnexos = currentAnexos[stage] || [];
+          return {
+            ...prev,
+            anexos: {
+              ...currentAnexos,
+              [stage]: [...stageAnexos, novoAnexo]
+            }
+          };
+        });
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  };
+
+  const removeStageAnexo = (stage: 'notificacao' | 'protesto' | 'comunicacaoCadin' | 'cadin', id: string) => {
+    setEditingDebito(prev => {
+      if (!prev) return prev;
+      const currentAnexos = prev.anexos || {};
+      const stageAnexos = currentAnexos[stage] || [];
+      return {
+        ...prev,
+        anexos: {
+          ...currentAnexos,
+          [stage]: stageAnexos.filter(anexo => anexo.id !== id)
+        }
+      };
+    });
+  };
 
   useEffect(() => {
     if (editingDebito) {
@@ -139,12 +203,17 @@ export default function Debitos() {
         updatedAt: new Date().toISOString(),
         notificacaoEnviada: editingDebito.notificacaoEnviada || false,
         dataNotificacao: editingDebito.dataNotificacao || null,
+        notificacaoResponsavel: editingDebito.notificacaoResponsavel || null,
         protestoEnviado: editingDebito.protestoEnviado || false,
         dataProtesto: editingDebito.dataProtesto || null,
+        protestoResponsavel: editingDebito.protestoResponsavel || null,
         cadinComunicado: editingDebito.cadinComunicado || false,
         dataComunicacaoCadin: editingDebito.dataComunicacaoCadin || null,
+        comunicacaoCadinResponsavel: editingDebito.comunicacaoCadinResponsavel || null,
         cadinIncluido: editingDebito.cadinIncluido || false,
-        dataCadin: editingDebito.dataCadin || null
+        dataCadin: editingDebito.dataCadin || null,
+        cadinResponsavel: editingDebito.cadinResponsavel || null,
+        anexos: editingDebito.anexos || null
       };
 
       if (editingDebito.id) {
@@ -240,7 +309,10 @@ export default function Debitos() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white w-full max-w-2xl max-h-[85vh] rounded-3xl shadow-2xl overflow-hidden border border-white/20 flex flex-col"
+              className={cn(
+                "bg-white w-full rounded-3xl shadow-2xl overflow-hidden border border-slate-200/50 flex flex-col transition-all duration-300",
+                editingDebito?.id ? "max-w-6xl h-[90vh]" : "max-w-2xl max-h-[85vh]"
+              )}
             >
               <div className="bg-crb-navy p-6 flex justify-between items-center bg-gradient-to-r from-crb-navy to-crb-purple shrink-0">
                 <div className="flex items-center gap-3">
@@ -256,8 +328,15 @@ export default function Debitos() {
                 </button>
               </div>
 
-              <form onSubmit={handleSave} className="flex-1 min-h-0 flex flex-col">
-                <div className="p-8 space-y-6 overflow-y-auto flex-1">
+              <form onSubmit={handleSave} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                <div className={cn(
+                  "flex-1 min-h-0 overflow-hidden flex flex-col",
+                  editingDebito?.id ? "lg:flex-row" : ""
+                )}>
+                  <div className={cn(
+                    "overflow-y-auto h-full flex flex-col",
+                    editingDebito?.id ? "w-full lg:w-[55%] p-6 md:p-8 space-y-6 border-b lg:border-b-0 lg:border-r border-slate-200" : "p-8 space-y-6 flex-1"
+                  )}>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">CRB do Profissional/Empresa</label>
@@ -456,7 +535,7 @@ export default function Debitos() {
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           
                           {/* 1. NOTIFICACAO */}
                           <div className={cn(
@@ -471,15 +550,69 @@ export default function Debitos() {
                                 </span>
                               </div>
                               {editingDebito.notificacaoEnviada ? (
-                                <div className="mt-2">
-                                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100/60 px-2.5 py-1 rounded-md inline-block">
+                                <div className="mt-2 space-y-1">
+                                  <span className="text-xs font-bold text-emerald-700 bg-emerald-100/60 px-2.5 py-1 rounded-md inline-block font-sans">
                                     Notificado em: {editingDebito.dataNotificacao ? editingDebito.dataNotificacao.split('-').reverse().join('/') : 'S/A'}
                                   </span>
+                                  {editingDebito.notificacaoResponsavel && (
+                                    <span className="text-[9px] text-slate-400 font-medium block tracking-tight">
+                                      Resp: {editingDebito.notificacaoResponsavel}
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
                                   Aguardando envio oficial da notificação de débito (30 dias).
                                 </p>
+                              )}
+
+                              {/* Notification Attachments list */}
+                              {editingDebito.anexos?.notificacao && editingDebito.anexos.notificacao.length > 0 && (
+                                <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2">
+                                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Documentos:</span>
+                                  {editingDebito.anexos.notificacao.map((file) => (
+                                    <div key={file.id} className="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                                      <span className="font-bold text-slate-600 truncate max-w-[120px] block" title={file.nome}>
+                                        {file.nome}
+                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => openAttachment(file)}
+                                          className="p-1 text-slate-500 hover:text-white hover:bg-crb-navy rounded transition-colors"
+                                          title="Visualizar documento"
+                                        >
+                                          <Eye size={12} />
+                                        </button>
+                                        {!isReadOnly && (
+                                          <button
+                                            type="button"
+                                            onClick={() => removeStageAnexo('notificacao', file.id)}
+                                            className="p-1 text-red-500 hover:text-white hover:bg-red-500 rounded transition-colors"
+                                            title="Excluir documento"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {!isReadOnly && editingDebito.notificacaoEnviada && (
+                                <div className="mt-2 pt-1 border-t border-dashed border-slate-100">
+                                  <label className="flex items-center justify-center gap-1 p-1.5 border border-dashed border-slate-200 hover:border-crb-purple rounded-lg cursor-pointer text-slate-500 hover:text-crb-purple transition-all text-center">
+                                    <Plus size={12} />
+                                    <span className="text-[9px] font-bold uppercase tracking-wider">Novo Anexo</span>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      className="hidden"
+                                      onChange={(e) => handleStageFileUpload(e, 'notificacao')}
+                                    />
+                                  </label>
+                                </div>
                               )}
                             </div>
 
@@ -493,12 +626,16 @@ export default function Debitos() {
                                         ...editingDebito,
                                         notificacaoEnviada: false,
                                         dataNotificacao: null,
+                                        notificacaoResponsavel: null,
                                         protestoEnviado: false,
                                         dataProtesto: null,
+                                        protestoResponsavel: null,
                                         cadinComunicado: false,
                                         dataComunicacaoCadin: null,
+                                        comunicacaoCadinResponsavel: null,
                                         cadinIncluido: false,
-                                        dataCadin: null
+                                        dataCadin: null,
+                                        cadinResponsavel: null
                                       });
                                     }}
                                     className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
@@ -519,7 +656,8 @@ export default function Debitos() {
                                         setEditingDebito({
                                           ...editingDebito,
                                           notificacaoEnviada: true,
-                                          dataNotificacao: tempNotifDate || todayStr
+                                          dataNotificacao: tempNotifDate || todayStr,
+                                          notificacaoResponsavel: userData?.nome || userData?.email || 'Sistema'
                                         });
                                       }}
                                       className="w-full text-[10px] text-white bg-crb-navy hover:bg-[#112455] py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors"
@@ -546,15 +684,69 @@ export default function Debitos() {
                                 </span>
                               </div>
                               {editingDebito.protestoEnviado ? (
-                                <div className="mt-2">
-                                  <span className="text-xs font-bold text-purple-700 bg-purple-100/60 px-2.5 py-1 rounded-md inline-block">
+                                <div className="mt-2 space-y-1">
+                                  <span className="text-xs font-bold text-purple-700 bg-purple-100/60 px-2.5 py-1 rounded-md inline-block font-sans">
                                     Protestado em: {editingDebito.dataProtesto ? editingDebito.dataProtesto.split('-').reverse().join('/') : 'S/A'}
                                   </span>
+                                  {editingDebito.protestoResponsavel && (
+                                    <span className="text-[9px] text-slate-400 font-medium block tracking-tight">
+                                      Resp: {editingDebito.protestoResponsavel}
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
                                   Requer notificação prévia. Envia débito ao cartório por 180 dias.
                                 </p>
+                              )}
+
+                              {/* Protesto Attachments list */}
+                              {editingDebito.anexos?.protesto && editingDebito.anexos.protesto.length > 0 && (
+                                <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2">
+                                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Documentos:</span>
+                                  {editingDebito.anexos.protesto.map((file) => (
+                                    <div key={file.id} className="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                                      <span className="font-bold text-slate-600 truncate max-w-[120px] block" title={file.nome}>
+                                        {file.nome}
+                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => openAttachment(file)}
+                                          className="p-1 text-slate-500 hover:text-white hover:bg-crb-navy rounded transition-colors"
+                                          title="Visualizar documento"
+                                        >
+                                          <Eye size={12} />
+                                        </button>
+                                        {!isReadOnly && (
+                                          <button
+                                            type="button"
+                                            onClick={() => removeStageAnexo('protesto', file.id)}
+                                            className="p-1 text-red-500 hover:text-white hover:bg-red-500 rounded transition-colors"
+                                            title="Excluir documento"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {!isReadOnly && editingDebito.protestoEnviado && (
+                                <div className="mt-2 pt-1 border-t border-dashed border-slate-100">
+                                  <label className="flex items-center justify-center gap-1 p-1.5 border border-dashed border-slate-200 hover:border-crb-purple rounded-lg cursor-pointer text-slate-500 hover:text-crb-purple transition-all text-center">
+                                    <Plus size={12} />
+                                    <span className="text-[9px] font-bold uppercase tracking-wider">Novo Anexo</span>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      className="hidden"
+                                      onChange={(e) => handleStageFileUpload(e, 'protesto')}
+                                    />
+                                  </label>
+                                </div>
                               )}
                             </div>
 
@@ -568,10 +760,13 @@ export default function Debitos() {
                                         ...editingDebito,
                                         protestoEnviado: false,
                                         dataProtesto: null,
+                                        protestoResponsavel: null,
                                         cadinComunicado: false,
                                         dataComunicacaoCadin: null,
+                                        comunicacaoCadinResponsavel: null,
                                         cadinIncluido: false,
-                                        dataCadin: null
+                                        dataCadin: null,
+                                        cadinResponsavel: null
                                       });
                                     }}
                                     className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
@@ -594,7 +789,8 @@ export default function Debitos() {
                                         setEditingDebito({
                                           ...editingDebito,
                                           protestoEnviado: true,
-                                          dataProtesto: tempProtestoDate || todayStr
+                                          dataProtesto: tempProtestoDate || todayStr,
+                                          protestoResponsavel: userData?.nome || userData?.email || 'Sistema'
                                         });
                                       }}
                                       title={!editingDebito.notificacaoEnviada ? "Protesto só permitido após notificação" : "Enviar débito para protesto em cartório"}
@@ -622,10 +818,15 @@ export default function Debitos() {
                                 </span>
                               </div>
                               {editingDebito.cadinComunicado ? (
-                                <div className="mt-2">
-                                  <span className="text-xs font-bold text-indigo-700 bg-indigo-100/60 px-2.5 py-1 rounded-md inline-block">
-                                    Comunicado em: {editingDebito.dataComunicacaoCadin ? editingDebito.dataComunicacaoCadin.split('-').reverse().join('/') : 'S/A'}
+                                <div className="mt-2 space-y-1">
+                                  <span className="text-xs font-bold text-indigo-700 bg-indigo-100/60 px-2.5 py-1 rounded-md inline-block font-sans">
+                                    Comunicado em: {editingDebito.dataCommunicationCadin || editingDebito.dataComunicacaoCadin ? (editingDebito.dataCommunicationCadin || editingDebito.dataComunicacaoCadin)!.split('-').reverse().join('/') : 'S/A'}
                                   </span>
+                                  {editingDebito.comunicacaoCadinResponsavel && (
+                                    <span className="text-[9px] text-slate-400 font-medium block tracking-tight">
+                                      Resp: {editingDebito.comunicacaoCadinResponsavel}
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
@@ -635,6 +836,55 @@ export default function Debitos() {
                                     "Comunicação que inicia o prazo de 75 dias para inclusão no CADIN."
                                   )}
                                 </p>
+                              )}
+
+                              {/* Comunicação CADIN Attachments list */}
+                              {editingDebito.anexos?.comunicacaoCadin && editingDebito.anexos.comunicacaoCadin.length > 0 && (
+                                <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2">
+                                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Documentos:</span>
+                                  {editingDebito.anexos.comunicacaoCadin.map((file) => (
+                                    <div key={file.id} className="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                                      <span className="font-bold text-slate-600 truncate max-w-[120px] block" title={file.nome}>
+                                        {file.nome}
+                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => openAttachment(file)}
+                                          className="p-1 text-slate-500 hover:text-white hover:bg-crb-navy rounded transition-colors"
+                                          title="Visualizar documento"
+                                        >
+                                          <Eye size={12} />
+                                        </button>
+                                        {!isReadOnly && (
+                                          <button
+                                            type="button"
+                                            onClick={() => removeStageAnexo('comunicacaoCadin', file.id)}
+                                            className="p-1 text-red-500 hover:text-white hover:bg-red-500 rounded transition-colors"
+                                            title="Excluir documento"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {!isReadOnly && editingDebito.cadinComunicado && (
+                                <div className="mt-2 pt-1 border-t border-dashed border-slate-100">
+                                  <label className="flex items-center justify-center gap-1 p-1.5 border border-dashed border-slate-200 hover:border-crb-purple rounded-lg cursor-pointer text-slate-500 hover:text-crb-purple transition-all text-center">
+                                    <Plus size={12} />
+                                    <span className="text-[9px] font-bold uppercase tracking-wider">Novo Anexo</span>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      className="hidden"
+                                      onChange={(e) => handleStageFileUpload(e, 'comunicacaoCadin')}
+                                    />
+                                  </label>
+                                </div>
                               )}
                             </div>
 
@@ -648,8 +898,10 @@ export default function Debitos() {
                                         ...editingDebito,
                                         cadinComunicado: false,
                                         dataComunicacaoCadin: null,
+                                        comunicacaoCadinResponsavel: null,
                                         cadinIncluido: false,
-                                        dataCadin: null
+                                        dataCadin: null,
+                                        cadinResponsavel: null
                                       });
                                     }}
                                     className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
@@ -672,7 +924,8 @@ export default function Debitos() {
                                         setEditingDebito({
                                           ...editingDebito,
                                           cadinComunicado: true,
-                                          dataComunicacaoCadin: tempCadinComunicacaoDate || todayStr
+                                          dataComunicacaoCadin: tempCadinComunicacaoDate || todayStr,
+                                          comunicacaoCadinResponsavel: userData?.nome || userData?.email || 'Sistema'
                                         });
                                       }}
                                       title={!editingDebito.protestoEnviado ? "Comunicação CADIN só permitida após protesto" : diasRestantesProtesto > 0 ? `Aguardando completar 180 dias de protesto (${diasRestantesProtesto} dias restantes)` : "Registrar comunicação prévia ao devedor"}
@@ -700,10 +953,15 @@ export default function Debitos() {
                                 </span>
                               </div>
                               {editingDebito.cadinIncluido ? (
-                                <div className="mt-2">
-                                  <span className="text-xs font-bold text-red-700 bg-red-100/60 px-2.5 py-1 rounded-md inline-block">
+                                <div className="mt-2 space-y-1">
+                                  <span className="text-xs font-bold text-red-700 bg-red-100/60 px-2.5 py-1 rounded-md inline-block font-sans">
                                     Incluso em: {editingDebito.dataCadin ? editingDebito.dataCadin.split('-').reverse().join('/') : 'S/A'}
                                   </span>
+                                  {editingDebito.cadinResponsavel && (
+                                    <span className="text-[9px] text-slate-400 font-medium block tracking-tight">
+                                      Resp: {editingDebito.cadinResponsavel}
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
@@ -713,6 +971,55 @@ export default function Debitos() {
                                     "Inclusão efetiva no CADIN após 75 dias de comunicação prévia."
                                   )}
                                 </p>
+                              )}
+
+                              {/* CADIN Attachments list */}
+                              {editingDebito.anexos?.cadin && editingDebito.anexos.cadin.length > 0 && (
+                                <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2">
+                                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Documentos:</span>
+                                  {editingDebito.anexos.cadin.map((file) => (
+                                    <div key={file.id} className="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                                      <span className="font-bold text-slate-600 truncate max-w-[120px] block" title={file.nome}>
+                                        {file.nome}
+                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => openAttachment(file)}
+                                          className="p-1 text-slate-500 hover:text-white hover:bg-crb-navy rounded transition-colors"
+                                          title="Visualizar documento"
+                                        >
+                                          <Eye size={12} />
+                                        </button>
+                                        {!isReadOnly && (
+                                          <button
+                                            type="button"
+                                            onClick={() => removeStageAnexo('cadin', file.id)}
+                                            className="p-1 text-red-500 hover:text-white hover:bg-red-500 rounded transition-colors"
+                                            title="Excluir documento"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {!isReadOnly && editingDebito.cadinIncluido && (
+                                <div className="mt-2 pt-1 border-t border-dashed border-slate-100">
+                                  <label className="flex items-center justify-center gap-1 p-1.5 border border-dashed border-slate-200 hover:border-crb-purple rounded-lg cursor-pointer text-slate-500 hover:text-crb-purple transition-all text-center">
+                                    <Plus size={12} />
+                                    <span className="text-[9px] font-bold uppercase tracking-wider">Novo Anexo</span>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      className="hidden"
+                                      onChange={(e) => handleStageFileUpload(e, 'cadin')}
+                                    />
+                                  </label>
+                                </div>
                               )}
                             </div>
 
@@ -725,7 +1032,8 @@ export default function Debitos() {
                                       setEditingDebito({
                                         ...editingDebito,
                                         cadinIncluido: false,
-                                        dataCadin: null
+                                        dataCadin: null,
+                                        cadinResponsavel: null
                                       });
                                     }}
                                     className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
@@ -748,7 +1056,8 @@ export default function Debitos() {
                                         setEditingDebito({
                                           ...editingDebito,
                                           cadinIncluido: true,
-                                          dataCadin: tempCadinDate || todayStr
+                                          dataCadin: tempCadinDate || todayStr,
+                                          cadinResponsavel: userData?.nome || userData?.email || 'Sistema'
                                         });
                                       }}
                                       title={!editingDebito.cadinComunicado ? "CADIN só permitido após comunicação prévia" : diasRestantesComunicacao > 0 ? `Aguardando completar 75 dias de comunicação (${diasRestantesComunicacao} dias restantes)` : "Incluir registro de forma externa no CADIN"}
@@ -780,7 +1089,452 @@ export default function Debitos() {
                   ></textarea>
                 </div>
 
-                </div>
+                  </div> {/* Fechamento do painel/coluna da esquerda */}
+
+                  {/* COLUNA DIREITA: Linha do Tempo & Central de Anexos */}
+                  {editingDebito?.id && (
+                    <div className="w-full lg:w-[45%] p-6 md:p-8 space-y-6 overflow-y-auto bg-slate-50/50 flex flex-col h-full border-t lg:border-t-0 border-slate-200">
+                      
+                      {/* Tabs Header */}
+                      <div className="flex bg-slate-200/50 p-1 rounded-2xl gap-1 w-full border border-slate-200 shadow-xs max-w-sm self-center lg:self-start shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setModalTab('timeline')}
+                          className={cn(
+                            "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all uppercase tracking-wider",
+                            modalTab === 'timeline'
+                              ? "bg-white text-crb-navy shadow-xs ring-1 ring-slate-100"
+                              : "text-slate-500 hover:text-crb-navy"
+                          )}
+                        >
+                          <History size={14} />
+                          Linha do Tempo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setModalTab('anexos')}
+                          className={cn(
+                            "flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all uppercase tracking-wider",
+                            modalTab === 'anexos'
+                              ? "bg-white text-crb-navy shadow-xs ring-1 ring-slate-100"
+                              : "text-slate-500 hover:text-crb-navy"
+                          )}
+                        >
+                          <Paperclip size={14} />
+                          Anexos
+                          {(() => {
+                            const count = [
+                              ...(editingDebito?.anexos?.notificacao || []),
+                              ...(editingDebito?.anexos?.protesto || []),
+                              ...(editingDebito?.anexos?.comunicacaoCadin || []),
+                              ...(editingDebito?.anexos?.cadin || [])
+                            ].length;
+                            return count > 0 ? (
+                              <span className="bg-crb-purple text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full font-black">
+                                {count}
+                              </span>
+                            ) : null;
+                          })()}
+                        </button>
+                      </div>
+
+                      {/* Content Panels */}
+                      {modalTab === 'timeline' && (
+                        <div className="flex-1 flex flex-col space-y-4">
+                          <div className="flex flex-col">
+                            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                              <History size={16} className="text-crb-purple" />
+                              Rastreabilidade & Linha do Tempo
+                            </h4>
+                            <p className="text-xs text-slate-550">
+                              Histórico de auditoria, prazos regulamentares e documentos de instrução de cobrança.
+                            </p>
+                          </div>
+                          
+                          <div className="relative border-l-2 border-slate-200 pl-6 ml-3 space-y-6 py-2">
+                            {/* 1. ORIGEM */}
+                            <div className="relative">
+                              <div className="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-slate-100 border-2 border-slate-400 flex items-center justify-center shadow-xs">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-700 uppercase tracking-widest block">Lançamento do Débito</span>
+                                  <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md">
+                                    {editingDebito.updatedAt ? new Date(editingDebito.updatedAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR')}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-slate-550 leading-relaxed font-semibold">
+                                  Registro fiscal inicial do débito (Exercício {editingDebito.ano}) no valor de {formatCurrency(editingDebito.valor || 0)}.
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* 2. NOTIFICACAO */}
+                            <div className="relative">
+                              <div className={cn(
+                                "absolute -left-[31px] top-1.5 w-4 h-4 rounded-full flex items-center justify-center shadow-xs",
+                                editingDebito.notificacaoEnviada ? "bg-emerald-50 border-2 border-emerald-500" : "bg-slate-50 border-2 border-slate-300"
+                              )}>
+                                <span className={cn(
+                                  "w-1.5 h-1.5 rounded-full",
+                                  editingDebito.notificacaoEnviada ? "bg-emerald-500" : "bg-slate-300"
+                                )}></span>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.notificacaoEnviada ? "text-emerald-700" : "text-slate-500")}>
+                                    1. Notificação de Débito
+                                  </span>
+                                  {editingDebito.notificacaoEnviada && (
+                                    <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md">
+                                      {editingDebito.dataNotificacao ? editingDebito.dataNotificacao.split('-').reverse().join('/') : 'S/A'}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-550 leading-relaxed font-semibold">
+                                  {editingDebito.notificacaoEnviada 
+                                    ? `Notificação regulamentar expedida pelo servidor ${editingDebito.notificacaoResponsavel || 'Sistema'}.`
+                                    : "Pendente. Aguardando notificação oficial para abertura de 30 dias regulamentares."
+                                  }
+                                </p>
+                                
+                                {/* Notification attached files */}
+                                {editingDebito.anexos?.notificacao && editingDebito.anexos.notificacao.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {editingDebito.anexos.notificacao.map((file) => (
+                                      <div key={file.id} className="flex items-center justify-between p-2 bg-white hover:bg-slate-50 border border-slate-200/60 rounded-xl text-xs transition-colors shadow-2xs">
+                                        <div className="flex items-center gap-2 truncate">
+                                          <FileText size={14} className="text-slate-400 shrink-0" />
+                                          <div className="flex flex-col truncate">
+                                            <span className="font-bold text-slate-700 truncate max-w-[150px]" title={file.nome}>
+                                              {file.nome}
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-medium">
+                                              {file.tamanho ? `${(file.tamanho / 1024).toFixed(1)} KB` : 'S/A'} • {file.dataUpload ? new Date(file.dataUpload).toLocaleDateString('pt-BR') : 'Sem data'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openAttachment(file)}
+                                            className="p-1 px-1.5 bg-slate-50 hover:bg-crb-navy border border-slate-200 hover:border-crb-navy text-slate-500 hover:text-white rounded-lg transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                            title="Visualizar documento"
+                                          >
+                                            <Eye size={12} />
+                                            Abrir
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 3. PROTESTO */}
+                            <div className="relative">
+                              <div className={cn(
+                                "absolute -left-[31px] top-1.5 w-4 h-4 rounded-full flex items-center justify-center shadow-xs",
+                                editingDebito.protestoEnviado ? "bg-purple-100 border-2 border-purple-500" : "bg-slate-50 border-2 border-slate-300"
+                              )}>
+                                <span className={cn(
+                                  "w-1.5 h-1.5 rounded-full",
+                                  editingDebito.protestoEnviado ? "bg-purple-500" : "bg-slate-300"
+                                )}></span>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.protestoEnviado ? "text-purple-700" : "text-slate-500")}>
+                                    2. Envio para Protesto
+                                  </span>
+                                  {editingDebito.protestoEnviado && (
+                                    <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-50 border border-purple-100 px-2 py-0.5 rounded-md">
+                                      {editingDebito.dataProtesto ? editingDebito.dataProtesto.split('-').reverse().join('/') : 'S/A'}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-555 leading-relaxed font-semibold">
+                                  {editingDebito.protestoEnviado 
+                                    ? `Título encaminhado para protesto em cartório por ${editingDebito.protestoResponsavel || 'Sistema'}.`
+                                    : "Pendente. Caso não haja impugnação ou pagamento, o débito é enviado para protesto extrajudicial."
+                                  }
+                                </p>
+                                
+                                {/* Protesto attached files */}
+                                {editingDebito.anexos?.protesto && editingDebito.anexos.protesto.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {editingDebito.anexos.protesto.map((file) => (
+                                      <div key={file.id} className="flex items-center justify-between p-2 bg-white hover:bg-slate-50 border border-slate-200/60 rounded-xl text-xs transition-colors shadow-2xs">
+                                        <div className="flex items-center gap-2 truncate">
+                                          <FileText size={14} className="text-slate-400 shrink-0" />
+                                          <div className="flex flex-col truncate">
+                                            <span className="font-bold text-slate-700 truncate max-w-[150px]" title={file.nome}>
+                                              {file.nome}
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-medium">
+                                              {file.tamanho ? `${(file.tamanho / 1024).toFixed(1)} KB` : 'S/A'} • {file.dataUpload ? new Date(file.dataUpload).toLocaleDateString('pt-BR') : 'Sem data'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openAttachment(file)}
+                                            className="p-1 px-1.5 bg-slate-50 hover:bg-crb-navy border border-slate-200 hover:border-crb-navy text-slate-500 hover:text-white rounded-lg transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                            title="Visualizar documento"
+                                          >
+                                            <Eye size={12} />
+                                            Abrir
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 4. COMUNICAÇÃO CADIN */}
+                            <div className="relative">
+                              <div className={cn(
+                                "absolute -left-[31px] top-1.5 w-4 h-4 rounded-full flex items-center justify-center shadow-xs",
+                                editingDebito.cadinComunicado ? "bg-indigo-100 border-2 border-indigo-500" : "bg-slate-50 border-2 border-slate-300"
+                              )}>
+                                <span className={cn(
+                                  "w-1.5 h-1.5 rounded-full",
+                                  editingDebito.cadinComunicado ? "bg-indigo-500" : "bg-slate-300"
+                                )}></span>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.cadinComunicado ? "text-indigo-700" : "text-slate-500")}>
+                                    3. Comunicação CADIN
+                                  </span>
+                                  {editingDebito.cadinComunicado && (
+                                    <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md">
+                                      {editingDebito.dataComunicacaoCadin ? editingDebito.dataComunicacaoCadin.split('-').reverse().join('/') : 'S/A'}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-550 leading-relaxed font-semibold">
+                                  {editingDebito.cadinComunicado 
+                                    ? `Comunicação prévia de inclusão no CADIN devedores cadastrada por ${editingDebito.comunicacaoCadinResponsavel || 'Sistema'}.`
+                                    : "Pendente. Notificação prévia obrigatória conferindo um prazo de tolerância legal de 75 dias."
+                                  }
+                                </p>
+                                
+                                {/* Comunicacao CADIN attached files */}
+                                {editingDebito.anexos?.comunicacaoCadin && editingDebito.anexos.comunicacaoCadin.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {editingDebito.anexos.comunicacaoCadin.map((file) => (
+                                      <div key={file.id} className="flex items-center justify-between p-2 bg-white hover:bg-slate-50 border border-slate-200/60 rounded-xl text-xs transition-colors shadow-2xs">
+                                        <div className="flex items-center gap-2 truncate">
+                                          <FileText size={14} className="text-slate-400 shrink-0" />
+                                          <div className="flex flex-col truncate">
+                                            <span className="font-bold text-slate-700 truncate max-w-[150px]" title={file.nome}>
+                                              {file.nome}
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-medium">
+                                              {file.tamanho ? `${(file.tamanho / 1024).toFixed(1)} KB` : 'S/A'} • {file.dataUpload ? new Date(file.dataUpload).toLocaleDateString('pt-BR') : 'Sem data'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openAttachment(file)}
+                                            className="p-1 px-1.5 bg-slate-50 hover:bg-crb-navy border border-slate-200 hover:border-crb-navy text-slate-500 hover:text-white rounded-lg transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                            title="Visualizar documento"
+                                          >
+                                            <Eye size={12} />
+                                            Abrir
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 5. CADIN INCLUIDO */}
+                            <div className="relative">
+                              <div className={cn(
+                                "absolute -left-[31px] top-1.5 w-4 h-4 rounded-full flex items-center justify-center shadow-xs",
+                                editingDebito.cadinIncluido ? "bg-red-100 border-2 border-red-500" : "bg-slate-50 border-2 border-slate-300"
+                              )}>
+                                <span className={cn(
+                                  "w-1.5 h-1.5 rounded-full",
+                                  editingDebito.cadinIncluido ? "bg-red-500" : "bg-slate-300"
+                                )}></span>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.cadinIncluido ? "text-red-700" : "text-slate-500")}>
+                                    4. Cadastro no CADIN Efetivado
+                                  </span>
+                                  {editingDebito.cadinIncluido && (
+                                    <span className="text-[10px] font-mono font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-md">
+                                      {editingDebito.dataCadin ? editingDebito.dataCadin.split('-').reverse().join('/') : 'S/A'}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-550 leading-relaxed font-semibold">
+                                  {editingDebito.cadinIncluido 
+                                    ? `Inscrição ativa finalizada no banco de dados do CADIN pelo responsável ${editingDebito.cadinResponsavel || 'Sistema'}.`
+                                    : "Pendente. Registro formal de inadimplência no Cadastro Informativo após 75 dias de notificação prévia."
+                                  }
+                                </p>
+                                
+                                {/* CADIN attached files */}
+                                {editingDebito.anexos?.cadin && editingDebito.anexos.cadin.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {editingDebito.anexos.cadin.map((file) => (
+                                      <div key={file.id} className="flex items-center justify-between p-2 bg-white hover:bg-slate-50 border border-slate-200/60 rounded-xl text-xs transition-colors shadow-2xs">
+                                        <div className="flex items-center gap-2 truncate">
+                                          <FileText size={14} className="text-slate-400 shrink-0" />
+                                          <div className="flex flex-col truncate">
+                                            <span className="font-bold text-slate-700 truncate max-w-[150px]" title={file.nome}>
+                                              {file.nome}
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-medium">
+                                              {file.tamanho ? `${(file.tamanho / 1024).toFixed(1)} KB` : 'S/A'} • {file.dataUpload ? new Date(file.dataUpload).toLocaleDateString('pt-BR') : 'Sem data'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openAttachment(file)}
+                                            className="p-1 px-1.5 bg-slate-50 hover:bg-crb-navy border border-slate-200 hover:border-crb-navy text-slate-500 hover:text-white rounded-lg transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                            title="Visualizar documento"
+                                          >
+                                            <Eye size={12} />
+                                            Abrir
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                          </div>
+                        </div>
+                      )}
+
+                      {modalTab === 'anexos' && (
+                        <div className="flex-1 flex flex-col space-y-4">
+                          <div className="flex flex-col">
+                            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                              <Paperclip size={16} className="text-crb-purple" />
+                              Central de Documentos do Fluxo
+                            </h4>
+                            <p className="text-xs text-slate-500">
+                              Gerenciamento, download e visualização de todos os anexos organizados por etapa legal de cobrança.
+                            </p>
+                          </div>
+                          
+                          {(() => {
+                            const docs: { stageName: string; key: string; files: any[] }[] = [
+                              { stageName: '1. Notificação de Débito', key: 'notificacao', files: editingDebito?.anexos?.notificacao || [] },
+                              { stageName: '2. Envio para Protesto', key: 'protesto', files: editingDebito?.anexos?.protesto || [] },
+                              { stageName: '3. Comunicação CADIN', key: 'comunicacaoCadin', files: editingDebito?.anexos?.comunicacaoCadin || [] },
+                              { stageName: '4. Registro no CADIN', key: 'cadin', files: editingDebito?.anexos?.cadin || [] }
+                            ];
+                            const totalUploaded = docs.reduce((acc, curr) => acc + curr.files.length, 0);
+
+                            if (totalUploaded === 0) {
+                              return (
+                                <div className="p-12 border border-slate-200 border-dashed rounded-3xl text-center bg-white/50 flex flex-col items-center justify-center space-y-2">
+                                  <Paperclip size={32} className="text-slate-300 shadow-3xs" />
+                                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">Nenhum Documento Vinculado</span>
+                                  <p className="text-[11px] text-slate-400 max-w-xs leading-relaxed">
+                                    Adicione documentos e comprovantes fiscais diretamente a cada uma das etapas do fluxo de cobrança à esquerda para auditar esta conta.
+                                  </p>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="space-y-4 flex-1">
+                                {docs.map((stageBlock) => {
+                                  if (stageBlock.files.length === 0) return null;
+                                  return (
+                                    <div key={stageBlock.key} className="space-y-2">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 font-sans block">
+                                          {stageBlock.stageName}
+                                        </span>
+                                        <span className="bg-slate-200 text-slate-600 text-[9px] px-2 py-0.5 rounded-full font-bold">
+                                          {stageBlock.files.length} {stageBlock.files.length === 1 ? 'arquivo' : 'arquivos'}
+                                        </span>
+                                      </div>
+                                      
+                                      <div className="space-y-2">
+                                        {stageBlock.files.map((file) => (
+                                          <div key={file.id} className="p-3 bg-white border border-slate-200/60 rounded-xl hover:border-slate-300 transition-all flex items-center justify-between text-xs shadow-3xs">
+                                            <div className="flex items-start gap-3 truncate max-w-[70%]">
+                                              <div className="p-2 bg-slate-50 border border-slate-100 rounded-lg shrink-0 text-slate-500 mt-0.5 shadow-2xs">
+                                                <FileText size={16} />
+                                              </div>
+                                              <div className="flex flex-col truncate">
+                                                <span className="font-extrabold text-slate-700 truncate" title={file.nome}>
+                                                  {file.nome}
+                                                </span>
+                                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400 font-medium mt-0.5">
+                                                  <span>{file.tamanho ? `${(file.tamanho / 1024).toFixed(1)} KB` : 'Ficheiro'}</span>
+                                                  <span>•</span>
+                                                  <span>Uploaded: {file.dataUpload ? new Date(file.dataUpload).toLocaleDateString('pt-BR') : 'Sem data'}</span>
+                                                  {file.usuarioUpload && (
+                                                    <>
+                                                      <span>•</span>
+                                                      <span className="truncate max-w-[100px]" title={file.usuarioUpload}>Por {file.usuarioUpload}</span>
+                                                    </>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              <button
+                                                type="button"
+                                                onClick={() => openAttachment(file)}
+                                                className="p-1 px-2.5 bg-crb-navy/5 text-crb-navy hover:bg-crb-navy hover:text-white rounded-lg transition-colors text-[11px] font-bold flex items-center gap-1 shadow-2xs"
+                                                title="Visualizar documento"
+                                              >
+                                                <Eye size={12} />
+                                                <span>Abrir</span>
+                                              </button>
+                                              {!isReadOnly && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => removeStageAnexo(stageBlock.key as any, file.id)}
+                                                  className="p-1.5 text-red-500 hover:text-white hover:bg-red-500 hover:border-red-500 rounded-lg transition-colors border border-slate-200 bg-slate-50 shadow-2xs"
+                                                  title="Excluir documento"
+                                                >
+                                                  <Trash2 size={12} />
+                                                </button>
+                                              )}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                    </div>
+                  )}
+
+                </div> {/* Fechamento do painel flex container (esquerda + direita) */}
 
                 <div className="p-6 md:px-8 bg-slate-50 border-t border-slate-200 flex gap-4 shrink-0">
                   <button 
