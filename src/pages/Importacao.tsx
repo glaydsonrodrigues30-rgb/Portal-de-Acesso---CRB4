@@ -25,6 +25,13 @@ export default function Importacao() {
   const [error, setError] = useState<string | null>(null);
   const [stopRequested, setStopRequested] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
+  const [importSummary, setImportSummary] = useState<{
+    successCount: number;
+    ignoredCount: number;
+    ignoredDetails: string[];
+    errorCount: number;
+    errorDetails: string[];
+  } | null>(null);
 
   if (!isAdmin) return <div className="p-8 text-center text-slate-500">Acesso negado.</div>;
 
@@ -64,6 +71,74 @@ export default function Importacao() {
     }
   }
 
+  const findHeaderRowIndex = (rows: any[][]): number => {
+    const normalizeKey = (key: string) => {
+      return String(key || '')
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // remove accents
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, " ")     // replace all special characters/punctuation with space
+        .replace(/\s+/g, " ")            // turn multiple spaces to single space
+        .trim();
+    };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !Array.isArray(row)) continue;
+
+      const normalizedCells = row.map(cell => normalizeKey(String(cell || '')));
+
+      const hasNumeroProcesso = normalizedCells.some(c => 
+        c.includes('numero do processo') || 
+        c.includes('n do processo') || 
+        c.includes('numero processo') || 
+        c === 'numero' || 
+        c === 'n processo'
+      );
+
+      const hasNomeProfissional = normalizedCells.some(c => 
+        c === 'nome' || 
+        c.includes('profissional') || 
+        c.includes('solicitante') || 
+        c.includes('interessado')
+      );
+
+      const hasTipo = normalizedCells.some(c => 
+        c === 'tipo' || 
+        c.includes('tipo de solicitacao') || 
+        c.includes('tipo solicitacao') || 
+        c.includes('tipo do processo') || 
+        c.includes('tipo de processo') || 
+        c.includes('solicitacao')
+      );
+
+      if (hasNumeroProcesso && hasNomeProfissional && hasTipo) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  const convertRowsToObjects = (rows: any[][], headerIndex: number): any[] => {
+    const headers = rows[headerIndex].map(h => String(h || '').trim());
+    const dataObjects: any[] = [];
+    
+    for (let j = headerIndex + 1; j < rows.length; j++) {
+      const row = rows[j];
+      if (!row || row.every(cell => cell === undefined || cell === null || String(cell).trim() === '')) {
+        continue;
+      }
+      const obj: any = {};
+      headers.forEach((header, colIdx) => {
+        if (header) {
+          obj[header] = row[colIdx];
+        }
+      });
+      dataObjects.push(obj);
+    }
+    return dataObjects;
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -71,41 +146,86 @@ export default function Importacao() {
     setError(null);
     const reader = new FileReader();
 
-    if (file.name.endsWith('.csv')) {
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          processImportData(results.data);
-        }
-      });
+    if (importType === 'PROCESSOS') {
+      if (file.name.endsWith('.csv')) {
+        Papa.parse(file, {
+          header: false,
+          skipEmptyLines: false, // process empty rows ourselves to find headers
+          complete: (results) => {
+            const rows = results.data as any[][];
+            const headerIndex = findHeaderRowIndex(rows);
+            if (headerIndex === -1) {
+              setError('Não foi possível localizar o cabeçalho válido do arquivo de Processos. Verifique se o arquivo possui as colunas: "Numero do Processo", "Nome" e "Tipo".');
+              return;
+            }
+            const dataObjects = convertRowsToObjects(rows, headerIndex);
+            processImportData(dataObjects);
+          }
+        });
+      } else {
+        reader.onload = (evt) => {
+          try {
+            const bstr = evt.target?.result;
+            const wb = XLSX.read(bstr, { type: 'binary' });
+            const wsname = wb.SheetNames[0];
+            const ws = wb.Sheets[wsname];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+            const headerIndex = findHeaderRowIndex(rows);
+            if (headerIndex === -1) {
+              setError('Não foi possível localizar o cabeçalho válido do arquivo de Processos. Verifique se o arquivo possui as colunas: "Numero do Processo", "Nome" e "Tipo".');
+              return;
+            }
+            const dataObjects = convertRowsToObjects(rows, headerIndex);
+            processImportData(dataObjects);
+          } catch (err: any) {
+            console.error(err);
+            setError(`Erro ao ler o arquivo Excel: ${err.message || err}`);
+          }
+        };
+        reader.readAsBinaryString(file);
+      }
     } else {
-      reader.onload = (evt) => {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws);
-        processImportData(data);
-      };
-      reader.readAsBinaryString(file);
+      if (file.name.endsWith('.csv')) {
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            processImportData(results.data);
+          }
+        });
+      } else {
+        reader.onload = (evt) => {
+          try {
+            const bstr = evt.target?.result;
+            const wb = XLSX.read(bstr, { type: 'binary' });
+            const wsname = wb.SheetNames[0];
+            const ws = wb.Sheets[wsname];
+            const data = XLSX.utils.sheet_to_json(ws);
+            processImportData(data);
+          } catch (err: any) {
+            console.error(err);
+            setError(`Erro ao ler o arquivo Excel: ${err.message || err}`);
+          }
+        };
+        reader.readAsBinaryString(file);
+      }
     }
   };
 
   const processImportData = (raw: any[]) => {
     const normalizeKey = (key: string) => {
-      return key
-        .toLowerCase()
+      return String(key || '')
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "") // remove accents
-        .replace(/[º\/]/g, "") // remove symbols
-        .replace(/\s+/g, " ") // normalize spaces
-        .trim();
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, " ")     // replace all special characters/punctuation with space
+        .replace(/\s+/g, " ")            // turn multiple spaces to single space
+        .trim();                         // trim spaces
     };
 
     const findValue = (item: any, possibleNames: string[]) => {
       const normalizedPossibles = possibleNames.map(normalizeKey);
-      const keys = Object.keys(item);
+      const keys = Object.keys(item || {});
       for (const key of keys) {
         if (normalizedPossibles.includes(normalizeKey(key))) {
           return item[key];
@@ -127,16 +247,25 @@ export default function Importacao() {
       const parts = s.split(/[\/\-]/);
       if (parts.length === 3) {
         let d, m, y;
-        // Handle "3/31/2018" (MM/DD/YYYY)
+        // Se a terceira parte tem 4 dígitos (ex: 2026 em 25/05/2026)
         if (parts[2].length === 4) {
           y = parts[2];
-          if (parseInt(parts[0]) > 12) { // Probably DD/MM/YYYY
-            d = parts[0]; m = parts[1];
-          } else { // Probably MM/DD/YYYY
-            m = parts[0]; d = parts[1];
+          const p0 = parseInt(parts[0], 10);
+          const p1 = parseInt(parts[1], 10);
+          // Sob o contexto brasileiro, o padrão é DD/MM/YYYY (ex: 25/05/2026)
+          // Mas se o segundo número (mês) for maior que 12, então deve ser MM/DD/YYYY (como 12/25/2026)
+          if (p1 > 12) {
+            m = parts[0];
+            d = parts[1];
+          } else {
+            d = parts[0];
+            m = parts[1];
           }
         } else if (parts[0].length === 4) {
-          y = parts[0]; m = parts[1]; d = parts[2];
+          // YYYY-MM-DD
+          y = parts[0];
+          m = parts[1];
+          d = parts[2];
         }
         
         if (y && m && d) {
@@ -144,7 +273,13 @@ export default function Importacao() {
           return date.toISOString();
         }
       }
-      return new Date(s).toISOString();
+      try {
+        const date = new Date(s);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString();
+        }
+      } catch (e) {}
+      return "";
     };
 
     const parseVal = (val: any) => {
@@ -156,58 +291,171 @@ export default function Importacao() {
     };
 
     if (importType === 'OFICIOS') {
-      const oficios = raw.map(item => {
-        const numero = findValue(item, ['numero', 'n do oficio', 'numero do oficio', 'n oficio', 'numeroOficio']);
-        const assunto = findValue(item, ['assunto', 'tema', 'topico']);
-        const tipo = findValue(item, ['tipo', 'tipo de oficio', 'tipoOficio']);
-        const destinatario = findValue(item, ['destinatario', 'interessado', 'crb profissional', 'profissional']);
-        const data = findValue(item, ['data', 'data do envio', 'data envio', 'emissao', 'data de emissao', 'dataEnvio', 'dataEmissao']);
-        const status = findValue(item, ['status', 'situacao']);
-        const obs = findValue(item, ['observacoes', 'obs', 'observacao']);
-        const ano = findValue(item, ['ano', 'exercicio']);
+      if (raw.length > 0) {
+        const firstRow = raw[0];
+        const hasNumero = findValue(firstRow, ['numero do oficio', 'nº do oficio', 'numero do ofício', 'numero', 'n do oficio', 'numeroOficio', 'numero_do_oficio', 'numero oficio']) !== undefined;
+        const hasAssunto = findValue(firstRow, ['assunto', 'tema', 'topico']) !== undefined;
+        const hasDestinatario = findValue(firstRow, ['destinatario', 'destinatário', 'interessado', 'crb profissional', 'profissional']) !== undefined;
 
-        return {
-          numero: String(numero || '').trim(),
-          numeroOficio: String(numero || '').trim(),
-          assunto: String(assunto || '').trim(),
-          tipo: String(tipo || 'Circular').trim(),
-          tipoOficio: String(tipo || 'Circular').trim(),
-          destinatario: String(destinatario || '').trim(),
-          data: parseDateISO(data),
-          dataEnvio: parseDateISO(data),
-          status: String(status || 'Enviado').trim(),
-          observacao: String(obs || '').trim(),
-          observacoes: String(obs || '').trim(),
-          ano: parseInt(String(ano || new Date().getFullYear())),
+        if (!hasNumero || !hasAssunto || !hasDestinatario) {
+          setError('Coluna obrigatória ausente. A planilha deve conter pelo menos as colunas: "Numero do Oficio" (ou nº do oficio), "Assunto" e "Destinatario".');
+          setStatus('idle');
+          return;
+        }
+      }
+
+      const oficiosList: any[] = [];
+      const encounteredOficioNumbers = new Set<string>();
+
+      raw.forEach((item, index) => {
+        const numeroRaw = findValue(item, ['numero do oficio', 'nº do oficio', 'numero do ofício', 'numero', 'n do oficio', 'numeroOficio', 'numero_do_oficio', 'numero oficio']);
+        const assuntoRaw = findValue(item, ['assunto', 'tema', 'topico']);
+        const tipoRaw = findValue(item, ['tipo de oficio', 'tipo de ofício', 'tipo', 'tipoOficio', 'tipo_do_oficio', 'tipo do oficio']);
+        const destinatarioRaw = findValue(item, ['destinatario', 'destinatário', 'interessado', 'crb profissional', 'profissional']);
+        const dataRaw = findValue(item, ['data do envio', 'data de envio', 'data', 'data envio', 'emissao', 'data de emissao', 'dataEnvio', 'dataEmissao']);
+        const statusRaw = findValue(item, ['status', 'situacao', 'situação']);
+        const obsRaw = findValue(item, ['obs', 'observacoes', 'observações', 'observacao', 'observação']);
+        const anoRaw = findValue(item, ['ano', 'exercicio', 'exercício']);
+
+        // Remoção de espaços extras
+        const numeroClean = String(numeroRaw || '').trim().replace(/\s+/g, ' ');
+        const assuntoClean = String(assuntoRaw || '').trim().replace(/\s+/g, ' ');
+        const destinatarioClean = String(destinatarioRaw || '').trim().replace(/\s+/g, ' ');
+
+        // Validação de presença das colunas obrigatórias
+        if (!numeroClean || !assuntoClean || !destinatarioClean) {
+          return;
+        }
+
+        // Evitar duplicidade de número de ofício no próprio arquivo
+        if (encounteredOficioNumbers.has(numeroClean.toLowerCase())) {
+          return;
+        }
+        encounteredOficioNumbers.add(numeroClean.toLowerCase());
+
+        // Padronização de tipo (Circular, Interno, Externo, Gabinete)
+        const tipoClean = String(tipoRaw || 'Circular').trim().toLowerCase();
+        let tipoStandard = 'Circular';
+        if (tipoClean.includes('circular')) {
+          tipoStandard = 'Circular';
+        } else if (tipoClean.includes('interno') || tipoClean.includes('ci')) {
+          tipoStandard = 'Interno';
+        } else if (tipoClean.includes('externo')) {
+          tipoStandard = 'Externo';
+        } else if (tipoClean.includes('gabinete') || tipoClean.includes('presidencia') || tipoClean.includes('presidência')) {
+          tipoStandard = 'Gabinete';
+        } else if (tipoRaw) {
+          tipoStandard = String(tipoRaw).trim().replace(/\s+/g, ' ');
+        }
+
+        // Padronização de status (Enviado, Aguardando Envio, Pendente, Cancelado)
+        const statusClean = String(statusRaw || 'Enviado').trim().toLowerCase();
+        let statusStandard = 'Enviado';
+        if (statusClean.includes('aguardando') || statusClean.includes('envio') || statusClean.includes('espera')) {
+          statusStandard = 'Aguardando Envio';
+        } else if (statusClean.includes('pendente')) {
+          statusStandard = 'Pendente';
+        } else if (statusClean.includes('cancelado') || statusClean.includes('sem efeito') || statusClean.includes('nulo')) {
+          statusStandard = 'Cancelado';
+        } else if (statusClean.includes('enviado') || statusClean.includes('protocolado') || statusClean.includes('ok')) {
+          statusStandard = 'Enviado';
+        } else if (statusRaw) {
+          statusStandard = String(statusRaw).trim().replace(/\s+/g, ' ');
+        }
+
+        const dataParsed = parseDateISO(dataRaw) || new Date().toISOString();
+        const anoParsed = anoRaw ? parseInt(String(anoRaw)) : new Date(dataParsed).getFullYear();
+
+        oficiosList.push({
+          numero: numeroClean,
+          numeroOficio: numeroClean,
+          assunto: assuntoClean,
+          tipo: tipoStandard,
+          tipoOficio: tipoStandard,
+          destinatario: destinatarioClean,
+          data: dataParsed,
+          dataEnvio: dataParsed,
+          dataEmissao: dataParsed,
+          status: statusStandard,
+          observacao: String(obsRaw || '').trim().replace(/\s+/g, ' '),
+          observacoes: String(obsRaw || '').trim().replace(/\s+/g, ' '),
+          ano: isNaN(anoParsed) ? new Date().getFullYear() : anoParsed,
           updatedAt: new Date().toISOString()
-        };
-      }).filter(o => (o.numeroOficio || o.numero) && o.destinatario);
-      setData({ oficios });
+        });
+      });
+
+      setData({ oficios: oficiosList });
+      setStatus('preview');
     } else if (importType === 'PROCESSOS') {
-      const processos = raw.map(item => {
-        const numero = findValue(item, ['numero', 'n do processo', 'numero do processo', 'numeroProcesso']);
-        const profissional = findValue(item, ['profissional', 'interessado', 'crb profissional', 'profissional interessado']);
-        const solicitacao = findValue(item, ['solicitacao', 'tipo de processo', 'descricao', 'assunto']);
-        const data = findValue(item, ['data', 'data abertura', 'data da solicitacao', 'abertura', 'dataSolicitacao', 'dataAbertura']);
-        const status = findValue(item, ['status', 'situacao']);
-        const obs = findValue(item, ['observacoes', 'obs', 'observacao']);
-        const ano = findValue(item, ['ano', 'exercicio']);
+      if (raw.length > 0) {
+        const firstRow = raw[0];
+        const hasNumero = findValue(firstRow, ['numero do processo', 'nº do processo', 'numero de processo', 'numero', 'n do processo', 'numeroProcesso', 'numero_do_oficio', 'numero_do_processo', 'numero processo']) !== undefined;
+        const hasNome = findValue(firstRow, ['nome', 'profissional', 'interessado', 'crb profissional', 'nome do profissional', 'profissional interessado']) !== undefined;
+        const hasTipo = findValue(firstRow, ['tipo', 'tipo de processo', 'tipo de solicitacao', 'tipo solicitacao', 'solicitacao', 'descricao', 'assunto']) !== undefined;
 
-        return {
-          numero: String(numero || '').trim(),
-          numeroProcesso: String(numero || '').trim(),
-          profissional: String(profissional || '').trim(),
-          interessado: String(profissional || '').trim(),
-          solicitacao: String(solicitacao || '').trim(),
-          descricao: String(solicitacao || '').trim(),
-          dataSolicitacao: parseDateISO(data),
-          status: String(status || 'Em Análise').trim(),
-          observacao: String(obs || '').trim(),
-          ano: parseInt(String(ano || new Date().getFullYear())),
+        if (!hasNumero || !hasNome || !hasTipo) {
+          setError('Coluna obrigatória ausente. A planilha deve conter pelo menos as colunas: "Numero do Processo" (ou nº do processo), "Nome" (ou profissional) e "Tipo".');
+          setStatus('idle');
+          return;
+        }
+      }
+
+      const processosList: any[] = [];
+      const encounteredProcessoNumbers = new Set<string>();
+
+      raw.forEach((item, index) => {
+        const numeroRaw = findValue(item, ['numero do processo', 'nº do processo', 'numero de processo', 'numero', 'n do processo', 'numeroProcesso', 'numero_do_processo', 'numero processo']);
+        const profissionalRaw = findValue(item, ['nome', 'profissional', 'interessado', 'crb profissional', 'nome do profissional', 'profissional interessado']);
+        const solicitationRaw = findValue(item, ['tipo', 'tipo de processo', 'tipo de solicitacao', 'tipo solicitacao', 'solicitacao', 'descricao', 'assunto']);
+        
+        const dataSolicitacaoRaw = findValue(item, ['data da solicitacao', 'data da solicitação', 'data de solicitacao', 'data de solicitação', 'data solicitacao', 'data solicitação', 'data', 'data abertura', 'abertura', 'dataSolicitacao', 'dataAbertura']);
+        const dataPlenariaRaw = findValue(item, ['data da plenaria', 'data da plenária', 'data de plenaria', 'data de plenária', 'data plenaria', 'data plenária', 'plenaria', 'plenária', 'dataPlenaria', 'data_plenaria']);
+        const statusRaw = findValue(item, ['status', 'situacao', 'situação']);
+        const obsRaw = findValue(item, ['obs', 'observacoes', 'observações', 'observacao', 'observação']);
+        const anoRaw = findValue(item, ['ano', 'exercicio', 'exercício']);
+
+        // Remoção de espaços extras
+        const numeroClean = String(numeroRaw || '').trim().replace(/\s+/g, ' ');
+        const profissionalClean = String(profissionalRaw || '').trim().replace(/\s+/g, ' ');
+        const solicitationClean = String(solicitationRaw || '').trim().replace(/\s+/g, ' ');
+
+        // Validação de presença das colunas obrigatórias
+        if (!numeroClean || !profissionalClean || !solicitationClean) {
+          return;
+        }
+
+        // Evitar duplicidade de número de processo no próprio arquivo
+        if (encounteredProcessoNumbers.has(numeroClean.toLowerCase())) {
+          return;
+        }
+        encounteredProcessoNumbers.add(numeroClean.toLowerCase());
+
+        // Normalização de Datas
+        const dataSolicitacaoParsed = parseDateISO(dataSolicitacaoRaw) || new Date().toISOString();
+        const dataPlenariaParsed = parseDateISO(dataPlenariaRaw) || "";
+
+        const anoParsed = anoRaw ? parseInt(String(anoRaw)) : new Date(dataSolicitacaoParsed).getFullYear();
+
+        processosList.push({
+          numero: numeroClean,
+          numeroProcesso: numeroClean,
+          profissional: profissionalClean,
+          interessado: profissionalClean,
+          solicitacao: solicitationClean,
+          descricao: solicitationClean,
+          dataSolicitacao: dataSolicitacaoParsed,
+          dataAbertura: dataSolicitacaoParsed,
+          dataPlenaria: dataPlenariaParsed || null,
+          status: String(statusRaw || 'Em Análise').trim().replace(/\s+/g, ' '),
+          observacao: String(obsRaw || '').trim().replace(/\s+/g, ' '),
+          observacoes: String(obsRaw || '').trim().replace(/\s+/g, ' '),
+          ano: isNaN(anoParsed) ? new Date().getFullYear() : anoParsed,
           updatedAt: new Date().toISOString()
-        };
-      }).filter(p => (p.numeroProcesso || p.numero) && (p.profissional || p.interessado));
-      setData({ processos });
+        });
+      });
+
+      setData({ processos: processosList });
+      setStatus('preview');
     } else {
       const debitos: any[] = [];
       const notifications: any[] = [];
@@ -326,14 +574,149 @@ export default function Importacao() {
     try {
       if (importType === 'OFICIOS') {
         const { oficios } = data as any;
-        totalItems = oficios.length;
-        await performImport(oficios, 'oficios');
-        await logAuditoria('IMPORTACAO', 'OFICIOS', 'Múltiplos', { total: oficios.length });
+        setProgress(5);
+
+        // Buscar ofícios já existentes no Firestore
+        const oficiosSnap = await getDocs(collection(db, 'oficios'));
+        const existingOficiosSet = new Set<string>();
+        oficiosSnap.forEach(d => {
+          const item = d.data();
+          const n = item.numeroOficio || item.numero;
+          if (n) {
+            existingOficiosSet.add(String(n).trim().toLowerCase());
+          }
+        });
+
+        const toImport: any[] = [];
+        const ignoredList: string[] = [];
+        const errorList: string[] = [];
+
+        oficios.forEach((item: any) => {
+          if (existingOficiosSet.has(item.numeroOficio.toLowerCase())) {
+            ignoredList.push(`Número ${item.numeroOficio}: Já cadastrado no banco de dados.`);
+          } else {
+            toImport.push(item);
+          }
+        });
+
+        let successCount = 0;
+        let errorCount = 0;
+
+        if (toImport.length > 0) {
+          const batchSize = 100;
+          let localProcessed = 0;
+          for (let i = 0; i < toImport.length; i += batchSize) {
+            if (stopRequested) break;
+            const batch = writeBatch(db);
+            const chunk = toImport.slice(i, i + batchSize);
+
+            chunk.forEach(item => {
+              const deterministicId = `oficio_${item.numeroOficio}_${item.ano}_${item.destinatario.substring(0, 5)}`.replace(/[\/\.\s]/g, '-');
+              const docRef = doc(db, 'oficios', deterministicId);
+              batch.set(docRef, item, { merge: true });
+            });
+
+            try {
+              await batch.commit();
+              successCount += chunk.length;
+            } catch (err: any) {
+              console.error('Erro ao salvar lote de ofícios:', err);
+              errorCount += chunk.length;
+              errorList.push(`Falha de processamento no lote ${Math.floor(i / batchSize) + 1}: ${err.message || err}`);
+            }
+
+            localProcessed += chunk.length;
+            setProgress(5 + (localProcessed / toImport.length) * 95);
+          }
+        }
+
+        setImportSummary({
+          successCount,
+          ignoredCount: ignoredList.length,
+          ignoredDetails: ignoredList,
+          errorCount,
+          errorDetails: errorList
+        });
+
+        await logAuditoria('IMPORTACAO', 'OFICIOS', 'Múltiplos', { 
+          total: oficios.length,
+          sucesso: successCount,
+          duplicados_ignorados: ignoredList.length,
+          erros: errorCount
+        });
+
       } else if (importType === 'PROCESSOS') {
         const { processos } = data as any;
-        totalItems = processos.length;
-        await performImport(processos, 'processos');
-        await logAuditoria('IMPORTACAO', 'PROCESSOS', 'Múltiplos', { total: processos.length });
+        setProgress(5);
+
+        // Buscar processos já existentes no Firestore
+        const processosSnap = await getDocs(collection(db, 'processos'));
+        const existingProcessosSet = new Set<string>();
+        processosSnap.forEach(d => {
+          const item = d.data();
+          const p = item.numeroProcesso || item.numero;
+          if (p) {
+            existingProcessosSet.add(String(p).trim().toLowerCase());
+          }
+        });
+
+        const toImport: any[] = [];
+        const ignoredList: string[] = [];
+        const errorList: string[] = [];
+
+        processos.forEach((item: any) => {
+          if (existingProcessosSet.has(item.numeroProcesso.toLowerCase())) {
+            ignoredList.push(`Processo Nº ${item.numeroProcesso}: Já cadastrado no banco de dados.`);
+          } else {
+            toImport.push(item);
+          }
+        });
+
+        let successCount = 0;
+        let errorCount = 0;
+
+        if (toImport.length > 0) {
+          const batchSize = 100;
+          let localProcessed = 0;
+          for (let i = 0; i < toImport.length; i += batchSize) {
+            if (stopRequested) break;
+            const batch = writeBatch(db);
+            const chunk = toImport.slice(i, i + batchSize);
+
+            chunk.forEach(item => {
+              const deterministicId = `processo_${item.numeroProcesso}_${item.ano}_${String(item.profissional || '').substring(0, 5)}`.replace(/[\/\.\s]/g, '-');
+              const docRef = doc(db, 'processos', deterministicId);
+              batch.set(docRef, item, { merge: true });
+            });
+
+            try {
+              await batch.commit();
+              successCount += chunk.length;
+            } catch (err: any) {
+              console.error('Erro ao salvar lote de processos:', err);
+              errorCount += chunk.length;
+              errorList.push(`Falha de processamento no lote ${Math.floor(i / batchSize) + 1}: ${err.message || err}`);
+            }
+
+            localProcessed += chunk.length;
+            setProgress(5 + (localProcessed / toImport.length) * 95);
+          }
+        }
+
+        setImportSummary({
+          successCount,
+          ignoredCount: ignoredList.length,
+          ignoredDetails: ignoredList,
+          errorCount,
+          errorDetails: errorList
+        });
+
+        await logAuditoria('IMPORTACAO', 'PROCESSOS', 'Múltiplos', { 
+          total: processos.length,
+          sucesso: successCount,
+          duplicados_ignorados: ignoredList.length,
+          erros: errorCount
+        });
       } else {
         const { debitos, notifications, negotiations } = data as any;
         totalItems = debitos.length + notifications.length + negotiations.length;
@@ -346,8 +729,16 @@ export default function Importacao() {
           notifications: notifications.length, 
           negotiations: negotiations.length 
         });
+
+        setImportSummary({
+          successCount: debitos.length + notifications.length + negotiations.length,
+          ignoredCount: 0,
+          ignoredDetails: [],
+          errorCount: 0,
+          errorDetails: []
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setError('Houve um erro durante a importação. Alguns registros podem não ter sido importados.');
     }
@@ -564,22 +955,91 @@ export default function Importacao() {
       )}
 
       {status === 'finished' && (
-        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white p-20 rounded-3xl border border-slate-200 shadow-2xl text-center space-y-8 border-t-8 border-emerald-500">
-          <div className="w-24 h-24 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-lg shadow-emerald-200">
-            <CheckCircle2 size={56} />
+        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white p-10 md:p-16 rounded-3xl border border-slate-200 shadow-2xl text-center space-y-10 border-t-8 border-emerald-500">
+          <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-lg shadow-emerald-200">
+            <CheckCircle2 size={48} />
           </div>
+          
           <div className="space-y-3">
-            <h3 className="text-4xl font-serif font-bold text-crb-navy text-balance">Base Atualizada com Sucesso!</h3>
-            <p className="text-slate-500 font-medium text-lg max-w-lg mx-auto leading-relaxed">
-              Os registros financeiros foram processados e normalizados. Todos os módulos operacionais já refletem os novos dados.
+            <h3 className="text-3xl font-serif font-bold text-crb-navy text-balance font-sans">Operação de Carga Concluída!</h3>
+            <p className="text-slate-500 font-medium text-base max-w-lg mx-auto leading-relaxed">
+              O processamento do arquivo de carga foi finalizado. Confira abaixo o detalhamento dos resultados.
             </p>
           </div>
-          <button 
-            onClick={() => setStatus('idle')}
-            className="px-12 py-4 bg-crb-navy text-white rounded-2xl font-bold hover:bg-crb-navy-dark transition-all shadow-xl shadow-crb-navy/20 uppercase tracking-widest text-xs"
-          >
-            Finalizar Operação
-          </button>
+
+          {importSummary && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto text-left">
+              <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-black text-emerald-700 uppercase tracking-widest block mb-1">Importados</span>
+                  <span className="text-4xl font-serif font-bold text-emerald-800">{importSummary.successCount}</span>
+                </div>
+                <p className="text-xs text-emerald-600/80 font-medium mt-3">Registros adicionados ou mesclados.</p>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-100 p-6 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-black text-amber-700 uppercase tracking-widest block mb-1">Ignorados</span>
+                  <span className="text-4xl font-serif font-bold text-amber-800">{importSummary.ignoredCount}</span>
+                </div>
+                <p className="text-xs text-amber-600/80 font-medium mt-3">Duplicações ou formatações ignoradas.</p>
+              </div>
+
+              <div className="bg-red-50 border border-red-100 p-6 rounded-2xl flex flex-col justify-between">
+                <div>
+                  <span className="text-xs font-black text-red-700 uppercase tracking-widest block mb-1">Erros</span>
+                  <span className="text-4xl font-serif font-bold text-red-800">{importSummary.errorCount}</span>
+                </div>
+                <p className="text-xs text-red-600/80 font-medium mt-3">Falhas impedindo a gravação de dados.</p>
+              </div>
+            </div>
+          )}
+
+          {importSummary && importSummary.ignoredDetails && importSummary.ignoredDetails.length > 0 && (
+            <div className="max-w-4xl mx-auto border border-slate-200 rounded-2xl overflow-hidden text-left bg-slate-50">
+              <div className="px-6 py-4 bg-slate-100 border-b border-slate-200">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  {importType === 'OFICIOS' ? 'Registros de Ofícios Duplicados ou Ignorados' : importType === 'PROCESSOS' ? 'Registros de Processos Duplicados ou Ignorados' : 'Registros Duplicados ou Ignorados'} ({importSummary.ignoredCount})
+                </span>
+              </div>
+              <div className="p-4 max-h-48 overflow-y-auto divide-y divide-slate-100 font-mono text-[11px] text-slate-500">
+                {importSummary.ignoredDetails.map((det, idx) => (
+                  <div key={idx} className="py-2 flex items-center justify-between">
+                    <span>{det}</span>
+                    <span className="text-[9px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-sans font-bold uppercase tracking-widest shrink-0 ml-4">Ignorado</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {importSummary && importSummary.errorDetails && importSummary.errorDetails.length > 0 && (
+            <div className="max-w-4xl mx-auto border border-red-200 rounded-2xl overflow-hidden text-left bg-red-50/50">
+              <div className="px-6 py-4 bg-red-100/50 border-b border-red-200">
+                <span className="text-xs font-bold text-red-700 uppercase tracking-wider">Erros de Gravação ({importSummary.errorCount})</span>
+              </div>
+              <div className="p-4 max-h-48 overflow-y-auto divide-y divide-red-100 font-mono text-[11px] text-red-600">
+                {importSummary.errorDetails.map((det, idx) => (
+                  <div key={idx} className="py-2">
+                    {det}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="pt-4">
+            <button 
+              onClick={() => {
+                setStatus('idle');
+                setImportSummary(null);
+                setData([]);
+              }}
+              className="px-12 py-4 bg-crb-navy text-white rounded-2xl font-bold hover:bg-crb-navy-dark transition-all shadow-xl shadow-crb-navy/20 uppercase tracking-widest text-xs"
+            >
+              Finalizar Operação
+            </button>
+          </div>
         </motion.div>
       )}
 
