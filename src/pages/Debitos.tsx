@@ -186,6 +186,14 @@ export default function Debitos() {
     e.preventDefault();
     if (!editingDebito?.crb || !editingDebito?.nome || !editingDebito?.valor || !editingDebito?.ano) return;
 
+    if (editingDebito.statusGeral === 'Pago') {
+      const pag = editingDebito.pagamento;
+      if (!pag || !pag.data || !pag.formaPagamento) {
+        alert('Por favor, informe a data e a forma de pagamento.');
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const dataToSave = {
@@ -213,6 +221,17 @@ export default function Debitos() {
         cadinIncluido: editingDebito.cadinIncluido || false,
         dataCadin: editingDebito.dataCadin || null,
         cadinResponsavel: editingDebito.cadinResponsavel || null,
+        negociacao: (editingDebito.statusGeral === 'Em Negociação' || editingDebito.negociacao) ? {
+          ativo: editingDebito.statusGeral === 'Em Negociação',
+          data: editingDebito.negociacao?.data || new Date().toISOString().split('T')[0],
+          formaPagamento: editingDebito.negociacao?.formaPagamento || 'Boleto',
+          parcelas: Number(editingDebito.negociacao?.parcelas !== undefined ? editingDebito.negociacao.parcelas : 1)
+        } : null,
+        pagamento: editingDebito.statusGeral === 'Pago' ? {
+          data: editingDebito.pagamento?.data || new Date().toISOString().split('T')[0],
+          formaPagamento: editingDebito.pagamento?.formaPagamento || 'Boleto',
+          parcelas: Number(editingDebito.pagamento?.parcelas !== undefined ? editingDebito.pagamento.parcelas : 1)
+        } : null,
         anexos: editingDebito.anexos || null
       };
 
@@ -450,7 +469,26 @@ export default function Debitos() {
                       disabled={isReadOnly}
                       className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
                       value={editingDebito?.statusGeral || 'Pendente'}
-                      onChange={(e) => setEditingDebito({...editingDebito!, statusGeral: e.target.value})}
+                      onChange={(e) => {
+                        const newStatus = e.target.value;
+                        const updated = { ...editingDebito!, statusGeral: newStatus };
+                        if (newStatus === 'Pago' && !updated.pagamento) {
+                          updated.pagamento = {
+                            data: new Date().toISOString().split('T')[0],
+                            formaPagamento: 'Boleto',
+                            parcelas: 1
+                          };
+                        }
+                        if (newStatus === 'Em Negociação' && !updated.negociacao) {
+                          updated.negociacao = {
+                            ativo: true,
+                            data: new Date().toISOString().split('T')[0],
+                            formaPagamento: 'Boleto',
+                            parcelas: 1
+                          };
+                        }
+                        setEditingDebito(updated);
+                      }}
                     >
                       <option value="Pendente">Pendente</option>
                       <option value="Pago">Pago</option>
@@ -459,6 +497,129 @@ export default function Debitos() {
                     </select>
                   </div>
                 </div>
+
+                {editingDebito?.statusGeral === 'Pago' && (
+                  <div className="border border-emerald-200 bg-emerald-50/30 p-5 rounded-2xl space-y-4 grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 text-left">
+                    <div className="col-span-1 md:col-span-3 pb-2 border-b border-emerald-100">
+                      <h4 className="text-xs font-bold text-emerald-800 uppercase tracking-widest text-[11px]">Informações de Pagamento</h4>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Data do Pagamento *</label>
+                      <input 
+                        required
+                        type="date"
+                        disabled={isReadOnly}
+                        className="w-full bg-white border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-emerald-500 outline-none transition-all font-bold text-crb-navy disabled:opacity-70 text-sm"
+                        value={editingDebito?.pagamento?.data || new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setEditingDebito({
+                          ...editingDebito!,
+                          pagamento: {
+                            ...editingDebito!.pagamento || { formaPagamento: 'Boleto', parcelas: 1 },
+                            data: e.target.value
+                          }
+                        })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Forma de Pagamento *</label>
+                      <select 
+                        disabled={isReadOnly}
+                        className="w-full bg-white border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-emerald-500 outline-none transition-all font-bold text-crb-navy disabled:opacity-70 text-sm"
+                        value={editingDebito?.pagamento?.formaPagamento || 'Boleto'}
+                        onChange={(e) => setEditingDebito({
+                          ...editingDebito!,
+                          pagamento: {
+                            ...editingDebito!.pagamento || { data: new Date().toISOString().split('T')[0], parcelas: 1 },
+                            formaPagamento: e.target.value
+                          }
+                        })}
+                      >
+                        <option value="À vista">À vista</option>
+                        <option value="Boleto">Boleto</option>
+                        <option value="Cartão">Cartão</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Número de Parcelas</label>
+                      <input 
+                        required
+                        type="number"
+                        min="1"
+                        disabled={isReadOnly}
+                        className="w-full bg-white border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-emerald-500 outline-none transition-all font-bold text-crb-navy disabled:opacity-70 text-sm"
+                        placeholder="1"
+                        value={editingDebito?.pagamento?.parcelas !== undefined ? editingDebito.pagamento.parcelas : 1}
+                        onChange={(e) => setEditingDebito({
+                          ...editingDebito!,
+                          pagamento: {
+                            ...editingDebito!.pagamento || { data: new Date().toISOString().split('T')[0], formaPagamento: 'Boleto' },
+                            parcelas: Number(e.target.value)
+                          }
+                        })}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {(editingDebito?.statusGeral === 'Em Negociação' || (editingDebito?.statusGeral === 'Pago' && editingDebito?.negociacao)) && (
+                  <div className="border border-slate-200 bg-slate-50/50 p-5 rounded-2xl space-y-4 grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Data da Negociação</label>
+                      <input 
+                        required
+                        type="date"
+                        disabled={isReadOnly}
+                        className="w-full bg-white border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70 text-sm"
+                        value={editingDebito?.negociacao?.data || new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setEditingDebito({
+                          ...editingDebito!,
+                          negociacao: {
+                            ...editingDebito!.negociacao || { ativo: true, formaPagamento: 'Boleto', parcelas: 1 },
+                            data: e.target.value
+                          }
+                        })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Forma de Pagamento</label>
+                      <select 
+                        disabled={isReadOnly}
+                        className="w-full bg-white border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70 text-sm"
+                        value={editingDebito?.negociacao?.formaPagamento || 'Boleto'}
+                        onChange={(e) => setEditingDebito({
+                          ...editingDebito!,
+                          negociacao: {
+                            ...editingDebito!.negociacao || { ativo: true, data: new Date().toISOString().split('T')[0], parcelas: 1 },
+                            formaPagamento: e.target.value
+                          }
+                        })}
+                      >
+                        <option value="À vista">À vista</option>
+                        <option value="Boleto">Boleto</option>
+                        <option value="Cartão">Cartão</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Número de Parcelas</label>
+                      <input 
+                        required
+                        type="number"
+                        min="1"
+                        disabled={isReadOnly}
+                        className="w-full bg-white border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70 text-sm"
+                        placeholder="1"
+                        value={editingDebito?.negociacao?.parcelas !== undefined ? editingDebito.negociacao.parcelas : 1}
+                        onChange={(e) => setEditingDebito({
+                          ...editingDebito!,
+                          negociacao: {
+                            ...editingDebito!.negociacao || { ativo: true, data: new Date().toISOString().split('T')[0], formaPagamento: 'Boleto' },
+                            parcelas: Number(e.target.value)
+                          }
+                        })}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {editingDebito && editingDebito.id && (() => {
                   const flowObj = calculateFlow(editingDebito as any, notifications);
@@ -1422,6 +1583,46 @@ export default function Debitos() {
                               </div>
                             </div>
 
+                            {/* 6. PAGAMENTO OU ACORDO */}
+                            {editingDebito.statusGeral === 'Pago' && editingDebito.pagamento && (
+                              <div className="relative">
+                                <div className="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-emerald-100 border-2 border-emerald-500 flex items-center justify-center shadow-xs">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                </div>
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs font-bold uppercase tracking-widest block text-emerald-700">
+                                      {editingDebito.pagamento.parcelas > 1 ? "Acordo registrado" : "Pagamento realizado"}
+                                    </span>
+                                    {editingDebito.pagamento.data && (
+                                      <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md">
+                                        {editingDebito.pagamento.data.split('-').reverse().join('/')}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-slate-555 leading-relaxed font-semibold">
+                                    {editingDebito.pagamento.parcelas > 1 
+                                      ? "Acordo / Negociação"
+                                      : "Pagamento do débito concluído e homologado."}
+                                  </p>
+                                  <div className="bg-emerald-50/50 border border-emerald-100/60 rounded-xl p-3 text-xs space-y-1.5 font-sans mt-2">
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-500 font-medium">Forma de Pagamento:</span>
+                                      <span className="font-bold text-slate-700">{editingDebito.pagamento.formaPagamento}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-slate-500 font-medium">Parcelas:</span>
+                                      <span className="font-bold text-slate-700">{editingDebito.pagamento.parcelas}x</span>
+                                    </div>
+                                    <div className="flex justify-between border-t border-emerald-100/40 pt-1.5 mt-1.5 font-bold">
+                                      <span className="text-slate-600 font-bold">Valor do Débito:</span>
+                                      <span className="text-emerald-750 font-extrabold">{formatCurrency(editingDebito.valorCorrigido || editingDebito.valor || 0)}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
                           </div>
                         </div>
                       )}
@@ -1728,12 +1929,26 @@ export default function Debitos() {
                       <td className="px-8 py-5">
                         <span className={cn(
                           "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border shadow-sm",
-                          item.statusGeral?.includes('Pago') 
+                          item.statusGeral === 'Pago' 
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
-                            : "bg-blue-50 text-blue-700 border-blue-200"
+                            : item.statusGeral === 'Em Negociação'
+                              ? "bg-amber-50 text-amber-700 border-amber-200"
+                              : item.statusGeral === 'Cancelado'
+                                ? "bg-slate-50 text-slate-500 border-slate-200"
+                                : "bg-red-50 text-red-700 border-red-200"
                         )}>
                           {item.statusGeral || 'Pendente'}
                         </span>
+                        {item.statusGeral === 'Em Negociação' && item.negociacao && (
+                          <div className="text-[10px] text-slate-500 mt-1 font-sans font-semibold">
+                            {item.negociacao.formaPagamento} ({item.negociacao.parcelas}x)
+                          </div>
+                        )}
+                        {item.statusGeral === 'Pago' && item.pagamento && (
+                          <div className="text-[10px] text-emerald-600 mt-1 font-sans font-bold">
+                            {item.pagamento.formaPagamento} ({item.pagamento.parcelas}x)
+                          </div>
+                        )}
                       </td>
                       <td className="px-8 py-5 text-right">
                       {isAdmin && (

@@ -16,6 +16,57 @@ import { useAuth } from '../lib/AuthContext';
 import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
 
+const parseDateISO = (val: any) => {
+  if (!val) return "";
+  if (typeof val === 'number') {
+    // XLSX serial date
+    const date = new Date((val - 25569) * 86400 * 1000);
+    return date.toISOString();
+  }
+  const s = String(val).trim();
+  if (!s) return "";
+  
+  const parts = s.split(/[\/\-]/);
+  if (parts.length === 3) {
+    let d, m, y;
+    if (parts[2].length === 4) {
+      y = parts[2];
+      const p0 = parseInt(parts[0], 10);
+      const p1 = parseInt(parts[1], 10);
+      if (p1 > 12) {
+        m = parts[0];
+        d = parts[1];
+      } else {
+        d = parts[0];
+        m = parts[1];
+      }
+    } else if (parts[0].length === 4) {
+      y = parts[0];
+      m = parts[1];
+      d = parts[2];
+    }
+    
+    if (y && m && d) {
+      const date = new Date(Number(y), Number(m) - 1, Number(d), 12, 0, 0);
+      return date.toISOString();
+    }
+  }
+  try {
+    const date = new Date(s);
+    if (!isNaN(date.getTime())) {
+      return date.toISOString();
+    }
+  } catch (e) {}
+  return "";
+};
+
+const parseVal = (val: any) => {
+  if (typeof val === 'number') return val;
+  if (!val) return 0;
+  const s = String(val).replace('R$', '').replace(/\s/g, '');
+  return parseFloat(s.replace(/\./g, '').replace(',', '.') || '0');
+};
+
 export default function Importacao() {
   const { isAdmin } = useAuth();
   const [data, setData] = useState<any[]>([]);
@@ -32,6 +83,321 @@ export default function Importacao() {
     errorCount: number;
     errorDetails: string[];
   } | null>(null);
+
+  const [professionalInfo, setProfessionalInfo] = useState<{ nome: string; cpf: string; crb: string } | null>(null);
+  const [groupedDetails, setGroupedDetails] = useState<any[]>([]);
+
+  const loadPdfJS = (): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      // @ts-ignore
+      if (window.pdfjsLib) {
+        // @ts-ignore
+        resolve(window.pdfjsLib);
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'pdfjs-script';
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
+      script.onload = () => {
+        // @ts-ignore
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+        // @ts-ignore
+        resolve(window.pdfjsLib);
+      };
+      script.onerror = (err) => reject(err);
+      document.body.appendChild(script);
+    });
+  };
+
+  const getBaseDescriptionAndInstallment = (desc: string): { baseDesc: string; curInstallment: number; maxInstallments: number } => {
+    let cleaned = desc.trim();
+    cleaned = cleaned.replace(/\s+/g, ' ');
+
+    const installmentMatch = cleaned.match(/(?:parcela\s+)?(\d+)\s*\/\s*(\d+)/i);
+    let curInstallment = 1;
+    let maxInstallments = 1;
+
+    if (installmentMatch) {
+      curInstallment = parseInt(installmentMatch[1], 10);
+      maxInstallments = parseInt(installmentMatch[2], 10);
+      cleaned = cleaned.replace(installmentMatch[0], '');
+    }
+
+    cleaned = cleaned.replace(/renegociacao\s*:/gi, 'Renegociação')
+                     .replace(/renegociação\s*:/gi, 'Renegociação');
+
+    const words = cleaned.split(' ');
+    const uniqueWords: string[] = [];
+    words.forEach(word => {
+      const wordLower = word.toLowerCase().trim();
+      if (!wordLower) return;
+      const lastWord = uniqueWords[uniqueWords.length - 1];
+      if (lastWord && lastWord.toLowerCase() === wordLower) {
+        return;
+      }
+      uniqueWords.push(word);
+    });
+    cleaned = uniqueWords.join(' ');
+
+    cleaned = cleaned.replace(/parcela/gi, '').replace(/[:\-\/]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    const yearMatches = cleaned.match(/\b\d{4}\b/g);
+    if (yearMatches && yearMatches.length > 1) {
+      const uniqueYears = Array.from(new Set(yearMatches));
+      uniqueYears.forEach(yr => {
+        cleaned = cleaned.replace(new RegExp(yr, 'g'), '');
+      });
+      cleaned = (cleaned + ' ' + uniqueYears[0]).replace(/\s+/g, ' ').trim();
+    }
+
+    if (/renegocia/i.test(cleaned)) {
+      const yearMatch = cleaned.match(/\b\d{4}\b/);
+      const yr = yearMatch ? yearMatch[0] : '';
+      cleaned = `Renegociação ${yr}`.trim();
+    } else if (/anuidade/i.test(cleaned)) {
+      const yearMatch = cleaned.match(/\b\d{4}\b/);
+      const yr = yearMatch ? yearMatch[0] : '';
+      cleaned = `Anuidade ${yr}`.trim();
+    }
+
+    return {
+      baseDesc: cleaned,
+      curInstallment,
+      maxInstallments
+    };
+  };
+
+  const processPDFText = (text: string) => {
+    const lines = text.split(/[\r\n]+/);
+    let pName = "";
+    let pCpf = "";
+    let pCrb = "";
+
+    const cpfRegex = /\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b/;
+    const crbRegex = /\b(CRB\s*[-/]?\s*\d+\s*(?:\/\d+)?)\b/i;
+    const crbNumberRegex = /\b(\d+)\s*[-/]?\s*CRB\b/i;
+
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      
+      const cpfM = line.match(cpfRegex);
+      if (cpfM && !pCpf) {
+        pCpf = cpfM[1].trim();
+      }
+
+      const crbM = line.match(crbRegex);
+      if (crbM && !pCrb) {
+        pCrb = crbM[1].trim();
+      } else {
+        const crbNumM = line.match(crbNumberRegex);
+        if (crbNumM && !pCrb) {
+          pCrb = `CRB-4/${crbNumM[1]}`.trim();
+        }
+      }
+
+      if (!pName) {
+        const nameM = line.match(/(?:nome|profissional|interessado|razao social|profissional\/beneficiario)\s*[:\-]\s*([A-Za-zÀ-ÖØ-öø-ÿ\s'\-\.]+)/i);
+        if (nameM && nameM[1]) {
+          const possibleName = nameM[1].trim();
+          if (possibleName.length > 5 && !/cpf|crb|inscricao|dados/i.test(possibleName)) {
+            pName = possibleName;
+          }
+        }
+      }
+    }
+
+    if (!pName) {
+      for (const line of lines) {
+        const trimVal = line.trim();
+        if (/^[A-ZÀ-ÖØ-ß\s]{6,40}$/.test(trimVal) && !/CRB|CPF|NOME|INSCRIC|CADASTRO|ADMIN|CONSELHO/i.test(trimVal)) {
+          pName = trimVal;
+          break;
+        }
+      }
+    }
+
+    if (!pName) pName = "Profissional Não Identificado";
+    if (!pCpf) pCpf = "000.000.000-00";
+    if (!pCrb) pCrb = "CRB-4/9999";
+
+    setProfessionalInfo({ nome: pName, cpf: pCpf, crb: pCrb });
+
+    const rawLines: any[] = [];
+    
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      if (/cpf|crb|inscricao|profissional|nome/i.test(trimmed) && trimmed.length < 50) {
+        continue; 
+      }
+
+      const dateMatch = trimmed.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+      if (!dateMatch) continue;
+
+      const dateStr = dateMatch[1];
+
+      const moneyMatches = trimmed.match(/\b\d*(?:\.\d{3})*,\d{2}\b/g) || trimmed.match(/R\$\s*-?\d*(?:\.\d{3})*,\d{2}/gi);
+      if (!moneyMatches) continue;
+
+      const valor = parseVal(moneyMatches[0]);
+      const valorCorrigido = moneyMatches.length >= 2 ? parseVal(moneyMatches[1]) : valor;
+
+      let desc = trimmed;
+      desc = desc.replace(dateStr, '');
+      moneyMatches.forEach(m => {
+        desc = desc.replace(m, '');
+      });
+      desc = desc.replace(/R\$/gi, '');
+      desc = desc.replace(/[^a-zA-Z0-9À-ÿ\s\/\-\:]/g, ' ');
+      desc = desc.replace(/\s+/g, ' ').trim();
+
+      if (desc.length > 3) {
+        rawLines.push({
+          rawDesc: desc,
+          dataVencimento: parseDateISO(dateStr),
+          valor,
+          valorCorrigido
+        });
+      }
+    }
+
+    const groups: { [key: string]: typeof rawLines } = {};
+    rawLines.forEach(row => {
+      const { baseDesc } = getBaseDescriptionAndInstallment(row.rawDesc);
+      if (!groups[baseDesc]) {
+        groups[baseDesc] = [];
+      }
+      groups[baseDesc].push(row);
+    });
+
+    const consolidatedDebitos: any[] = [];
+    const detailsPreview: any[] = [];
+
+    Object.keys(groups).forEach(baseDesc => {
+      const rows = groups[baseDesc];
+      
+      let sumValor = 0;
+      let sumValorCorrigido = 0;
+      let maxInst = 1;
+      let earliestDateStr = "";
+      let earliestDateVal = Infinity;
+
+      rows.forEach(r => {
+        sumValor += r.valor;
+        sumValorCorrigido += r.valorCorrigido;
+
+        const info = getBaseDescriptionAndInstallment(r.rawDesc);
+        if (info.maxInstallments > maxInst) {
+          maxInst = info.maxInstallments;
+        }
+
+        const dateMs = r.dataVencimento ? new Date(r.dataVencimento).getTime() : Infinity;
+        if (dateMs < earliestDateVal) {
+          earliestDateVal = dateMs;
+          earliestDateStr = r.dataVencimento;
+        }
+      });
+
+      if (rows.length > maxInst) {
+        maxInst = rows.length;
+      }
+
+      const yearMatch = baseDesc.match(/\b(20\d{2})\b/);
+      let ano = yearMatch ? parseInt(yearMatch[1], 10) : 0;
+      if (!ano && earliestDateStr) {
+        ano = new Date(earliestDateStr).getFullYear();
+      }
+      if (!ano) {
+        ano = new Date().getFullYear();
+      }
+
+      const cleanCrb = pCrb.replace(/[^a-zA-Z0-9\/]/g, '').trim();
+      const descSlug = baseDesc.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "-").slice(0, 10);
+      const debitoId = `${cleanCrb}_${ano}_${descSlug}`.replace(/[\/\.]/g, '-');
+
+      let negociacaoObj = null;
+      if (maxInst > 1) {
+        negociacaoObj = {
+          ativo: true,
+          data: new Date().toISOString().split('T')[0],
+          formaPagamento: 'Boleto',
+          parcelas: maxInst
+        };
+      }
+
+      consolidatedDebitos.push({
+        id: debitoId,
+        crb: pCrb,
+        nome: pName,
+        ano,
+        nomeDebito: baseDesc,
+        dataVencimento: earliestDateStr || new Date().toISOString(),
+        valor: sumValor,
+        valorCorrigido: sumValorCorrigido,
+        statusGeral: negociacaoObj ? 'Em Negociação' : 'Pendente',
+        updatedAt: new Date().toISOString(),
+        ...(negociacaoObj ? { negociacao: negociacaoObj } : {})
+      });
+
+      detailsPreview.push({
+        baseDesc,
+        originalCount: rows.length,
+        installments: maxInst,
+        valorTotal: sumValorCorrigido
+      });
+    });
+
+    setGroupedDetails(detailsPreview);
+    setData({ debitos: consolidatedDebitos });
+    setStatus('preview');
+  };
+
+  const processExcelData = (raw: any[]) => {
+    const debitos: any[] = [];
+
+    raw.forEach(item => {
+      const crb = String(item['CRB'] || item['Nº do CRB'] || item['Nº do CRB '] || item['Inscrição'] || item['Registro'] || '').trim();
+      const nome = String(item['Nome'] || item['Razão Social'] || item['Nome/Razão Social'] || item['Profissional'] || '').trim();
+      const ano = parseInt(item['Ano'] || item['Ano do Exercício'] || item['Ano Exercício'] || item['Exercicio'] || '0', 10);
+      
+      if (!crb || !nome) return;
+
+      const nomeDebito = String(item['Nome Débito'] || item['Descrição'] || item['Debito'] || 'Anuidade').trim();
+      const cleanDesc = nomeDebito.replace(/\s+/g, ' ').trim();
+      const descSlug = cleanDesc.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "-").slice(0, 10);
+      const uniqueDebitoId = `${crb}_${ano || new Date().getFullYear()}_${descSlug}`.replace(/[\/\.]/g, '-');
+
+      let negociacaoObj = undefined;
+      if (item['Forma Negociação'] || item['Valor Negociado']) {
+        negociacaoObj = {
+          ativo: true,
+          data: new Date().toISOString().split('T')[0],
+          formaPagamento: item['Forma Negociação'] || item['Forma de Pagamento'] || 'Boleto',
+          parcelas: parseInt(item['Nº Parcelas'] || item['Parcelas'] || '1', 10)
+        };
+      }
+
+      const statusSpreadsheet = item['Status Geral'] || item['Status'] || item['Situação'] || (negociacaoObj ? 'Em Negociação' : 'Pendente');
+
+      debitos.push({
+        id: uniqueDebitoId,
+        crb,
+        nome,
+        ano: isNaN(ano) || ano === 0 ? new Date().getFullYear() : ano,
+        nomeDebito: cleanDesc,
+        dataVencimento: parseDateISO(item['Data Vencimento'] || item['Vencimento'] || item['DataVencimento'] || item['Venc.']),
+        valor: parseVal(item['Valor'] || item['Valor Original'] || item['Valor Histórico']),
+        valorCorrigido: parseVal(item['Valor Corrigido'] || item['ValorCorrigido'] || item['Total'] || item['Valor']),
+        statusGeral: statusSpreadsheet,
+        updatedAt: new Date().toISOString(),
+        ...(negociacaoObj ? { negociacao: negociacaoObj } : {})
+      });
+    });
+
+    setData({ debitos });
+    setStatus('preview');
+  };
 
   if (!isAdmin) return <div className="p-8 text-center text-slate-500">Acesso negado.</div>;
 
@@ -144,7 +510,11 @@ export default function Importacao() {
     if (!file) return;
 
     setError(null);
+    setProfessionalInfo(null);
+    setGroupedDetails([]);
+    
     const reader = new FileReader();
+    const extension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
 
     if (importType === 'PROCESSOS') {
       if (file.name.endsWith('.csv')) {
@@ -184,7 +554,7 @@ export default function Importacao() {
         };
         reader.readAsBinaryString(file);
       }
-    } else {
+    } else if (importType === 'OFICIOS') {
       if (file.name.endsWith('.csv')) {
         Papa.parse(file, {
           header: true,
@@ -208,6 +578,55 @@ export default function Importacao() {
           }
         };
         reader.readAsBinaryString(file);
+      }
+    } else {
+      // BASE_FINANCEIRA (Débitos)
+      if (extension === '.pdf') {
+        const fileReader = new FileReader();
+        fileReader.onload = async (event) => {
+          try {
+            const arrBuffer = event.target?.result as ArrayBuffer;
+            const pdfjs = await loadPdfJS();
+            const loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrBuffer) });
+            const pdf = await loadingTask.promise;
+            let accumulatedText = "";
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const textContent = await page.getTextContent();
+              const pageText = textContent.items.map((item: any) => item.str).join(" ");
+              accumulatedText += pageText + "\n";
+            }
+            processPDFText(accumulatedText);
+          } catch (err: any) {
+            setError(`Erro ao processar PDF: ${err.message || err}`);
+          }
+        };
+        fileReader.readAsArrayBuffer(file);
+      } else if (extension === '.csv') {
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            processExcelData(results.data);
+          }
+        });
+      } else if (extension === '.xlsx' || extension === '.xls') {
+        reader.onload = (evt) => {
+          try {
+            const bstr = evt.target?.result;
+            const wb = XLSX.read(bstr, { type: 'binary' });
+            const wsname = wb.SheetNames[0];
+            const ws = wb.Sheets[wsname];
+            const data = XLSX.utils.sheet_to_json(ws);
+            processExcelData(data);
+          } catch (err: any) {
+            console.error(err);
+            setError(`Erro ao ler o arquivo Excel: ${err.message || err}`);
+          }
+        };
+        reader.readAsBinaryString(file);
+      } else {
+        setError('Formato não suportado. Carregue um arquivo Excel (.xls, .xlsx) ou PDF financeiro.');
       }
     }
   };
@@ -414,13 +833,15 @@ export default function Importacao() {
         const obsRaw = findValue(item, ['obs', 'observacoes', 'observações', 'observacao', 'observação']);
         const anoRaw = findValue(item, ['ano', 'exercicio', 'exercício']);
 
-        // Remoção de espaços extras
-        const numeroClean = String(numeroRaw || '').trim().replace(/\s+/g, ' ');
-        const profissionalClean = String(profissionalRaw || '').trim().replace(/\s+/g, ' ');
-        const solicitationClean = String(solicitationRaw || '').trim().replace(/\s+/g, ' ');
+        // Remoção de aspas (simples e duplas) e espaços extras
+        const cleanText = (v: any) => String(v || '').replace(/["']/g, '').replace(/\s+/g, ' ').trim();
+
+        const numeroClean = cleanText(numeroRaw);
+        const profesionalClean = cleanText(profissionalRaw);
+        const solicitationClean = cleanText(solicitationRaw);
 
         // Validação de presença das colunas obrigatórias
-        if (!numeroClean || !profissionalClean || !solicitationClean) {
+        if (!numeroClean || !profesionalClean || !solicitationClean) {
           return;
         }
 
@@ -436,19 +857,22 @@ export default function Importacao() {
 
         const anoParsed = anoRaw ? parseInt(String(anoRaw)) : new Date(dataSolicitacaoParsed).getFullYear();
 
+        const statusClean = statusRaw ? cleanText(statusRaw) : 'Em Análise';
+        const obsClean = cleanText(obsRaw);
+
         processosList.push({
           numero: numeroClean,
           numeroProcesso: numeroClean,
-          profissional: profissionalClean,
-          interessado: profissionalClean,
+          profissional: profesionalClean,
+          interessado: profesionalClean,
           solicitacao: solicitationClean,
           descricao: solicitationClean,
           dataSolicitacao: dataSolicitacaoParsed,
           dataAbertura: dataSolicitacaoParsed,
           dataPlenaria: dataPlenariaParsed || null,
-          status: String(statusRaw || 'Em Análise').trim().replace(/\s+/g, ' '),
-          observacao: String(obsRaw || '').trim().replace(/\s+/g, ' '),
-          observacoes: String(obsRaw || '').trim().replace(/\s+/g, ' '),
+          status: statusClean,
+          observacao: obsClean,
+          observacoes: obsClean,
           ano: isNaN(anoParsed) ? new Date().getFullYear() : anoParsed,
           updatedAt: new Date().toISOString()
         });
@@ -457,64 +881,7 @@ export default function Importacao() {
       setData({ processos: processosList });
       setStatus('preview');
     } else {
-      const debitos: any[] = [];
-      const notifications: any[] = [];
-      const negotiations: any[] = [];
-
-      raw.forEach(item => {
-        const crb = String(item['CRB'] || item['Nº do CRB'] || item['Nº do CRB '] || '').trim();
-        const nome = String(item['Nome'] || item['Razão Social'] || item['Nome/Razão Social'] || '').trim();
-        const ano = parseInt(item['Ano'] || item['Ano do Exercício'] || '0');
-        
-        if (!crb || !ano) return;
-
-        const debitoId = `${crb}_${ano}`.replace(/[\/\.]/g, '-');
-        
-        // Debito data
-        debitos.push({
-          id: debitoId,
-          crb,
-          nome,
-          ano,
-          nomeDebito: item['Nome Débito'] || item['Descrição'] || 'Anuidade',
-          dataVencimento: parseDateISO(item['Data Vencimento'] || item['Vencimento'] || item['DataVencimento']),
-          valor: parseVal(item['Valor'] || item['Valor Original']),
-          valorCorrigido: parseVal(item['Valor Corrigido'] || item['ValorCorrigido'] || item['Total']),
-          statusGeral: item['Status Geral'] || 'Pendente',
-          updatedAt: new Date().toISOString()
-        });
-
-        // Notification data
-        if (item['Data Notificação'] || item['Tipo Notificação']) {
-          notifications.push({
-            debitoId,
-            debitosIds: [debitoId],
-            dataNotificacao: parseDateISO(item['Data Notificação'] || item['DataNotificacao']),
-            tipo: item['Tipo Notificação'] || 'Administrativa',
-            prazoDias: parseInt(item['Prazo Resposta'] || item['Prazo'] || '15'),
-            statusPrazo: item['Status Prazo'] || 'Em Aberto',
-            tipoEnvio: item['Status Contato'] || item['Tipo de Envio'] || 'Correios',
-            createdAt: new Date().toISOString()
-          });
-        }
-
-        // Negotiation data
-        if (item['Forma Negociação'] || item['Valor Negociado']) {
-          negotiations.push({
-            crb,
-            debitosIds: [debitoId],
-            valorTotal: parseVal(item['Valor Corrigido'] || item['Total']),
-            valorNegociado: parseVal(item['Valor Negociado'] || item['ValorNegociado']),
-            formaNegociacao: item['Forma Negociação'] || item['Forma de Pagamento'] || 'Parcelado',
-            nParcelas: parseInt(item['Nº Parcelas'] || item['Parcelas'] || '1'),
-            statusContato: item['Status Geral'] || 'Concluído',
-            dataNegociacao: new Date().toISOString().split('T')[0],
-            createdAt: new Date().toISOString()
-          });
-        }
-      });
-
-      setData({ debitos, notifications, negotiations });
+      processExcelData(raw);
     }
     setStatus('preview');
   };
@@ -718,20 +1085,18 @@ export default function Importacao() {
           erros: errorCount
         });
       } else {
-        const { debitos, notifications, negotiations } = data as any;
-        totalItems = debitos.length + notifications.length + negotiations.length;
-        await performImport(debitos, 'debits');
-        await performImport(notifications, 'notifications');
-        await performImport(negotiations, 'negotiations');
+        const { debitos } = data as any;
+        const numNegociacoes = (debitos || []).filter((d: any) => d.negociacao).length;
+        totalItems = (debitos || []).length;
+        await performImport(debitos || [], 'debits');
         
         await logAuditoria('IMPORTACAO', 'BASE_COMPLETA', 'Múltiplos', { 
-          debitos: debitos.length, 
-          notifications: notifications.length, 
-          negotiations: negotiations.length 
+          debitos: (debitos || []).length, 
+          negotiations: numNegociacoes
         });
 
         setImportSummary({
-          successCount: debitos.length + notifications.length + negotiations.length,
+          successCount: (debitos || []).length,
           ignoredCount: 0,
           ignoredDetails: [],
           errorCount: 0,
@@ -762,7 +1127,7 @@ export default function Importacao() {
               disabled={status !== 'idle'}
               className="bg-white border-2 border-slate-100 px-4 py-3 rounded-2xl outline-none focus:border-crb-blue font-bold text-crb-navy text-sm transition-all"
             >
-              <option value="BASE_FINANCEIRA">Débitos / Notificações / Negociações</option>
+              <option value="BASE_FINANCEIRA">Débitos</option>
               <option value="OFICIOS">Ofícios</option>
               <option value="PROCESSOS">Processos</option>
             </select>
@@ -780,7 +1145,7 @@ export default function Importacao() {
           <label className="flex-1 md:flex-none flex items-center justify-center gap-3 bg-crb-navy text-white px-6 md:px-8 py-3.5 rounded-2xl hover:bg-crb-navy-dark transition-all cursor-pointer font-bold shadow-lg shadow-crb-navy/20 text-xs md:text-sm tracking-wide group mt-5">
             <Upload size={20} className="group-hover:rotate-12 transition-transform text-crb-blue" />
             Carregar Arquivo
-            <input type="file" className="hidden" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} />
+            <input type="file" className="hidden" accept=".csv,.xlsx,.xls,.pdf" onChange={handleFileUpload} />
           </label>
         </div>
       </div>
@@ -797,7 +1162,7 @@ export default function Importacao() {
                 {importType === 'OFICIOS' ? (
                   <>
                     <p className="text-2xl font-serif font-bold">{(data as any).oficios?.length || 0} Ofícios Identificados</p>
-                    <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mt-2">Correspondências prontas para integração.</p>
+                    <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mt-2">Correspondências prontas para integration.</p>
                   </>
                 ) : importType === 'PROCESSOS' ? (
                   <>
@@ -806,11 +1171,18 @@ export default function Importacao() {
                   </>
                 ) : (
                   <>
-                    <p className="text-2xl font-serif font-bold">{(data as any).debitos?.length || 0} Registros Identificados</p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-                      <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-white/80 font-bold uppercase tracking-widest border border-white/5">{(data as any).notifications?.length || 0} Notificações</span>
-                      <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-white/80 font-bold uppercase tracking-widest border border-white/5">{(data as any).negotiations?.length || 0} Negociações</span>
-                    </div>
+                    <p className="text-2xl font-serif font-bold">{(data as any).debitos?.length || 0} Débitos Reconhecidos</p>
+                    {professionalInfo ? (
+                      <div className="mt-2 text-xs bg-white/5 rounded-xl p-3 border border-white/5 space-y-1">
+                        <p className="text-white/80 font-semibold"><span className="text-crb-blue">Profissional Identificado:</span> {professionalInfo.nome}</p>
+                        <p className="text-white/60"><strong>CPF:</strong> {professionalInfo.cpf} | <strong>CRB:</strong> {professionalInfo.crb}</p>
+                        <p className="text-emerald-400 font-bold">Agrupamento inteligente ativado. {groupedDetails.length} débitos consolidados.</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                        <span className="text-[10px] bg-white/10 px-2 py-0.5 rounded text-white/80 font-bold uppercase tracking-widest border border-white/5">{(data as any).debitos?.filter((d: any) => d.negociacao)?.length || 0} Negociações detectadas</span>
+                      </div>
+                    )}
                     <p className="text-white/40 text-[10px] font-bold uppercase tracking-widest mt-2">Dados normalizados e prontos para processamento.</p>
                   </>
                 )}
@@ -851,8 +1223,8 @@ export default function Importacao() {
                     </>
                   ) : (
                     <>
-                      <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">Registro CRB</th>
-                      <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">Proprietário/Entidade</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">Descrição / Nome do Débito</th>
+                      <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">Contribuinte / CRB</th>
                       <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">Exercício</th>
                       <th className="px-6 py-4 text-[10px] font-bold text-white/40 uppercase tracking-[0.2em]">Valor Histórico</th>
                     </>
@@ -881,8 +1253,20 @@ export default function Importacao() {
                 ) : (
                   (data as any).debitos?.slice(0, 10).map((item: any, i: number) => (
                     <tr key={i} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4 text-sm font-bold text-crb-navy">{item.crb}</td>
-                      <td className="px-6 py-4 text-sm text-slate-600 font-bold uppercase truncate max-w-[200px]">{item.nome}</td>
+                      <td className="px-6 py-4 text-sm font-bold text-crb-navy">
+                        <div>
+                          <p>{item.nomeDebito}</p>
+                          {item.negociacao && (
+                            <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-bold uppercase tracking-wider mt-1 inline-block">
+                              Com Negociação ({item.negociacao.formaPagamento} - {item.negociacao.parcelas}x)
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-sm">
+                        <p className="text-slate-600 font-bold uppercase truncate max-w-[200px]">{item.nome}</p>
+                        <p className="text-xs text-slate-400 font-mono">CRB: {item.crb}</p>
+                      </td>
                       <td className="px-6 py-4 text-sm font-bold text-slate-400">{item.ano}</td>
                       <td className="px-6 py-4 text-sm font-serif font-bold text-crb-navy">R$ {item.valor.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                     </tr>

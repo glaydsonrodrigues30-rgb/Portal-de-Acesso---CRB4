@@ -24,6 +24,7 @@ interface SummaryStats {
   processosPendentes: number;
   notificacoesAtrasadas: number;
   inadimplenciaPercent: number;
+  parcelasAtivas: number;
 }
 
 export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) => void }) {
@@ -37,21 +38,18 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
         
         const debitosCol = collection(db, 'debits');
         const notifCol = collection(db, 'notifications');
-        const negCol = collection(db, 'negotiations');
         const oficiosCol = collection(db, 'oficios');
         const processosCol = collection(db, 'processos');
 
-        // Fetching all to apply complex JS logic as requested
+        // Fetching all
         const [
           debitosSnap,
           notifSnap,
-          negSnap,
           oficiosSnap,
           processosSnap
         ] = await Promise.all([
           getDocs(debitosCol),
           getDocs(notifCol),
-          getDocs(negCol),
           getDocs(oficiosCol),
           getDocs(processosCol)
         ]);
@@ -72,9 +70,8 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
         };
         
         // Calculation Logic according to request
-        const debitos = debitosSnap.docs.map(doc => doc.data());
-        const notifications = notifSnap.docs.map(doc => doc.data());
-        const negotiations = negSnap.docs.map(doc => doc.data());
+        const debitos = debitosSnap.docs.map(doc => doc.data() as any);
+        const notifications = notifSnap.docs.map(doc => doc.data() as any);
 
         // 1. Débitos Vencidos: data < hoje && status !== "pago"
         const vencidos = debitos.filter(d => {
@@ -82,7 +79,7 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           if (!data || isNaN(data.getTime())) return false;
           
           const status = String(d.situacao || d.status || d.statusGeral || '').toLowerCase();
-          return data < today && status !== "pago" && status !== "regularizado";
+          return data < today && status !== "pago" && status !== "regularizado" && status !== "em negociação";
         });
 
         // 2. Valor Total: sum of valorCorrigido
@@ -100,19 +97,19 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           ? (valorTotalVencido / valorTotalAberto) * 100 
           : 0;
 
-        // 3. Negociações: apenas status ativo ou concluído
-        const negociacoesAtivas = negotiations.filter(n => {
-          const status = String(n.status || n.statusGeral || n.statusContato || '').toLowerCase();
-          return status === 'ativo';
-        });
-
-        const negociacoesConcluidas = negotiations.filter(n => {
-          const status = String(n.status || n.statusGeral || n.statusContato || '').toLowerCase();
-          return status === 'concluido' || status === 'concluído';
-        });
-
-        const valorNegociadoTotal = negotiations.reduce(
-          (acc, n) => acc + Number(n.valorNegociado || 0),
+        // 3. Negociações a partir dos débitos
+        const debitosEmNegociacao = debitos.filter(d => d.statusGeral === 'Em Negociação');
+        
+        const totalNegociacoes = debitosEmNegociacao.length;
+        const totalNegociacoesAtivas = debitosEmNegociacao.filter(d => d.negociacao?.ativo !== false).length;
+        const totalNegociacoesConcluidas = debitos.filter(d => d.statusGeral === 'Pago' && d.negociacao).length;
+        
+        const valorNegociadoTotal = debitosEmNegociacao.reduce(
+          (acc, d) => acc + Number(d.valorCorrigido || d.valor || 0),
+          0
+        );
+        const totalParcelasAtivas = debitosEmNegociacao.reduce(
+          (acc, d) => acc + Number(d.negociacao?.parcelas || 0),
           0
         );
 
@@ -124,9 +121,9 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
           valorTotalAberto: valorTotalAberto,
           valorTotalVencido: valorTotalVencido,
           totalNotificacoes: notificacoesValidas.length,
-          totalNegociacoes: negotiations.length,
-          totalNegociacoesAtivas: negociacoesAtivas.length,
-          totalNegociacoesConcluidas: negociacoesConcluidas.length,
+          totalNegociacoes: totalNegociacoes,
+          totalNegociacoesAtivas: totalNegociacoesAtivas,
+          totalNegociacoesConcluidas: totalNegociacoesConcluidas,
           valorNegociadoTotal: valorNegociadoTotal,
           totalOficios: oficiosSnap.size,
           totalProcessos: processosSnap.size,
@@ -137,6 +134,7 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
             return refDate && refDate < today && String(n.statusPrazo || '').toLowerCase() !== 'respondido';
           }).length,
           inadimplenciaPercent,
+          parcelasAtivas: totalParcelasAtivas,
         });
       } catch (err) {
         console.error("Erro ao carregar summary stats:", err);
@@ -193,8 +191,8 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
             value={formatCurrency(stats.valorNegociadoTotal)} 
             icon={DollarSign} 
             color="bg-emerald-600" 
-            label={`${stats.totalNegociacoes} acordos totais`}
-            onClick={() => onTabChange('negociacoes')}
+            label={`${stats.totalNegociacoes} débitos em negociação`}
+            onClick={() => onTabChange('debitos')}
           />
         </div>
       </div>
@@ -211,19 +209,19 @@ export default function SummaryView({ onTabChange }: { onTabChange: (tab: any) =
             icon={Handshake} 
             color="bg-crb-purple" 
             label="Em fase de pagamento"
-            onClick={() => onTabChange('negociacoes')}
+            onClick={() => onTabChange('debitos')}
           />
           <StatItem 
-            title="Acordos Concluídos" 
-            value={stats.totalNegociacoesConcluidas.toString()} 
+            title="Parcelas Ativas" 
+            value={stats.parcelasAtivas.toString()} 
             icon={Clock} 
             color="bg-emerald-500" 
-            label="Regularização finalizada"
-            onClick={() => onTabChange('negociacoes')}
+            label="Soma das parcelas acordadas"
+            onClick={() => onTabChange('debitos')}
           />
-          <div className="bg-slate-50 p-8 rounded-[2rem] border border-dashed border-slate-300 flex flex-col justify-center items-center text-center group hover:border-crb-blue/30 transition-all cursor-pointer" onClick={() => onTabChange('negociacoes')}>
+          <div className="bg-slate-50 p-8 rounded-[2rem] border border-dashed border-slate-300 flex flex-col justify-center items-center text-center group hover:border-crb-blue/30 transition-all cursor-pointer" onClick={() => onTabChange('debitos')}>
             <p className="text-slate-500 font-bold mb-2">Visão Detalhada</p>
-            <p className="text-xs text-slate-400">Acesse o módulo de negociações para filtros avançados</p>
+            <p className="text-xs text-slate-400">Acesse o módulo de débitos para filtros avançados</p>
           </div>
         </div>
       </div>

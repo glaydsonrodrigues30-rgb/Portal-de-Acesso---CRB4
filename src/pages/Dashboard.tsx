@@ -4,15 +4,14 @@ import { db } from '../lib/firebase';
 import SummaryView from '../components/dashboards/SummaryView';
 import DebitosView from '../components/dashboards/DebitosView';
 import NotificacoesView from '../components/dashboards/NotificacoesView';
-import NegociacoesView from '../components/dashboards/NegociacoesView';
 import OficiosView from '../components/dashboards/OficiosView';
 import ProcessosView from '../components/dashboards/ProcessosView';
 import { 
-  BarChart3, CreditCard, Mail, Handshake, FileText, FolderOpen, Settings2 
+  BarChart3, CreditCard, Mail, FileText, FolderOpen, Settings2 
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type DashboardTab = 'geral' | 'debitos' | 'negociacoes' | 'oficios' | 'processos';
+type DashboardTab = 'geral' | 'debitos' | 'oficios' | 'processos';
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('geral');
@@ -22,7 +21,6 @@ export default function Dashboard() {
   const tabs = [
     { id: 'geral', label: 'Geral', icon: BarChart3, color: 'text-crb-navy' },
     { id: 'debitos', label: 'Débitos', icon: CreditCard, color: 'text-emerald-600' },
-    { id: 'negociacoes', label: 'Negociações', icon: Handshake, color: 'text-crb-purple' },
     { id: 'oficios', label: 'Ofícios Expedidos', icon: FileText, color: 'text-slate-600' },
     { id: 'processos', label: 'Processos', icon: FolderOpen, color: 'text-crb-blue' },
   ];
@@ -31,7 +29,6 @@ export default function Dashboard() {
     switch (activeTab) {
       case 'geral': return <SummaryView onTabChange={goToTab} />;
       case 'debitos': return <DebitosView />;
-      case 'negociacoes': return <NegociacoesView />;
       case 'oficios': return <OficiosView />;
       case 'processos': return <ProcessosView />;
       default: return <SummaryView onTabChange={goToTab} />;

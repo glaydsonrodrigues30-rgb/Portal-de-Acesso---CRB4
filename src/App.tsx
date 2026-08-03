@@ -8,7 +8,6 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Debitos from './pages/Debitos';
 import Notificacoes from './pages/Notificacoes';
-import Negociacoes from './pages/Negociacoes';
 import Oficios from './pages/Oficios';
 import Processos from './pages/Processos';
 import Relatorios from './pages/Relatorios';
@@ -43,7 +42,6 @@ export default function App() {
           <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/debitos" element={<ProtectedRoute><Debitos /></ProtectedRoute>} />
           <Route path="/notificacoes" element={<ProtectedRoute><Notificacoes /></ProtectedRoute>} />
-          <Route path="/negociacoes" element={<ProtectedRoute><Negociacoes /></ProtectedRoute>} />
           <Route path="/oficios" element={<ProtectedRoute><Oficios /></ProtectedRoute>} />
           <Route path="/processos" element={<ProtectedRoute><Processos /></ProtectedRoute>} />
           <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />

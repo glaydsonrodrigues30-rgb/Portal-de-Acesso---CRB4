@@ -102,7 +102,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 px-4 space-y-2 overflow-y-auto pt-4 md:pt-2">
           <SidebarItem to="/" icon={LayoutDashboard} label="Painel de Controle" onClick={() => setIsMobileMenuOpen(false)} />
           <SidebarItem to="/debitos" icon={CreditCard} label="Gestão de Débitos" onClick={() => setIsMobileMenuOpen(false)} />
-          <SidebarItem to="/negociacoes" icon={Handshake} label="Negociações" onClick={() => setIsMobileMenuOpen(false)} />
           <SidebarItem to="/oficios" icon={FileText} label="Ofícios Expedidos" onClick={() => setIsMobileMenuOpen(false)} />
           <SidebarItem to="/processos" icon={FolderOpen} label="Processos" onClick={() => setIsMobileMenuOpen(false)} />
           <SidebarItem to="/relatorios" icon={Files} label="Relatórios" onClick={() => setIsMobileMenuOpen(false)} />

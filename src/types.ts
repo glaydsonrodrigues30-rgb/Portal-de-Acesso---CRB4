@@ -47,6 +47,17 @@ export interface Debito {
   cadinIncluido?: boolean;
   dataCadin?: string | null;
   cadinResponsavel?: string | null;
+  negociacao?: {
+    ativo: boolean;
+    data: string;
+    formaPagamento: string;
+    parcelas: number;
+  } | null;
+  pagamento?: {
+    data: string;
+    formaPagamento: string;
+    parcelas: number;
+  } | null;
   anexos?: {
     notificacao?: ArquivoAnexo[];
     protesto?: ArquivoAnexo[];

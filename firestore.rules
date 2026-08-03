@@ -26,7 +26,7 @@ service cloud.firestore {
       allow list: if request.query.limit == 1;
 
       // Allow seeding the specific admin if it doesn't exist
-      allow create: if userId == 'admin_glaydson' && !exists(/databases/$(database)/documents/users/admin_glaydson);
+      allow create: if (userId == 'admin_glaydson' || userId == 'admin_crb4') && !exists(/databases/$(database)/documents/users/$(userId));
       
       // Allow admins to manage users (This is tricky without request.auth)
       // For now, let's allow read for all authenticated (in our custom sense) or just keep it open for development if needed.

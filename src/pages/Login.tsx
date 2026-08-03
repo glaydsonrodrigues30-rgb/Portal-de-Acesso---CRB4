@@ -111,14 +111,14 @@ export default function Login() {
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Usuário</label>
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Usuário ou E-mail</label>
               <input 
                 required
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3.5 px-6 rounded-2xl focus:border-crb-blue outline-none transition-all"
-                placeholder="Seu usuário"
+                placeholder="Ex: glaydson.rodrigues30@gmail.com ou Glaydson"
                 autoComplete="username"
               />
             </div>
