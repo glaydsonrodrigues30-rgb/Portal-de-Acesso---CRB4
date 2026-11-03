@@ -44,7 +44,7 @@ import {
 import { formatCurrency, formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
-import { calculateFlow, parseDateSafely } from '../lib/flowEngine';
+import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
 import TaskPanel from '../components/TaskPanel';
 
 export default function Debitos() {
@@ -262,10 +262,14 @@ export default function Debitos() {
     const matchesCRB = searchCRB ? d.crb.toLowerCase().includes(searchCRB.toLowerCase()) : true;
     const matchesAno = searchAno ? d.ano.toString() === searchAno : true;
 
-    // Calculate flow dynamically for filter check
-    const flow = (filterFase || filterPrazo) ? calculateFlow(d, notifications) : null;
-    const matchesFase = filterFase ? flow?.faseAtual === filterFase : true;
-    const matchesPrazo = filterPrazo ? flow?.status === filterPrazo : true;
+    // Calculate status dynamically for filter check
+    const statusInfo = (filterFase || filterPrazo) ? getStatusDebito(d, notifications) : null;
+    const matchesFase = filterFase ? statusInfo?.fase === filterFase : true;
+    const matchesPrazo = filterPrazo ? (
+      filterPrazo === 'Em prazo' ? statusInfo?.prazo === 'EM PRAZO' :
+      filterPrazo === 'Vencido' ? statusInfo?.prazo === 'VENCIDO' :
+      filterPrazo === 'Concluído' ? statusInfo?.prazo === 'CONCLUÍDO' : true
+    ) : true;
 
     return matchesSearch && matchesCRB && matchesAno && matchesFase && matchesPrazo;
   });
@@ -622,7 +626,7 @@ export default function Debitos() {
                 )}
 
                 {editingDebito && editingDebito.id && (() => {
-                  const flowObj = calculateFlow(editingDebito as any, notifications);
+                  const statusInfo = getStatusDebito(editingDebito as any, notifications);
                   const todayStr = new Date().toISOString().split('T')[0];
 
                   const diasRestantesProtesto = (() => {
@@ -647,40 +651,40 @@ export default function Debitos() {
                         <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Acompanhamento do Fluxo de Cobrança</span>
                         <span className={cn(
                           "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
-                          flowObj.status === 'Concluído' 
+                          statusInfo.prazo === 'CONCLUÍDO' 
                              ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                             : flowObj.status === 'Vencido'
+                             : statusInfo.prazo === 'VENCIDO'
                                ? "bg-red-100 text-red-800 border border-red-200"
                                : "bg-blue-100 text-blue-800 border border-blue-200"
                         )}>
-                          {flowObj.status}
+                          {statusInfo.prazo}
                         </span>
                       </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
                           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Fase Atual</span>
-                          <span className="text-sm font-sans font-extrabold text-crb-navy mt-0.5 block">{flowObj.faseAtual}</span>
+                          <span className="text-sm font-sans font-extrabold text-crb-navy mt-0.5 block">{statusInfo.fase}</span>
                         </div>
                         <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
                           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Início da Fase</span>
                           <span className="text-sm font-bold text-slate-600 mt-0.5 block">
-                            {flowObj.dataInicioFase ? flowObj.dataInicioFase.split('-').reverse().join('/') : 'S/A'}
+                            {statusInfo.dataInicioFormatada}
                           </span>
                         </div>
                         <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
                           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Prazo Final</span>
                           <span className="text-sm font-bold text-slate-600 mt-0.5 block">
-                            {flowObj.prazoFinal ? flowObj.prazoFinal.split('-').reverse().join('/') : 'S/A'}
+                            {statusInfo.prazoFinalFormatado}
                           </span>
                         </div>
                         <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-2xs">
                           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest block">Dias / Situação</span>
                           <span className={cn(
                             "text-sm font-extrabold mt-0.5 block",
-                            flowObj.status === 'Vencido' ? "text-red-600" : "text-emerald-600"
+                            statusInfo.prazo === 'VENCIDO' ? "text-red-600" : "text-emerald-600"
                           )}>
-                            {flowObj.status === 'Vencido' ? `Atraso: ${flowObj.atrasoDias}d` : `${flowObj.diasRestantes}d rest.`}
+                            {statusInfo.prazo === 'VENCIDO' ? (statusInfo.dias > 0 ? `Atraso: ${statusInfo.dias}d` : 'Vencido') : (statusInfo.temDataReal && statusInfo.dias > 0 ? `${statusInfo.dias}d rest.` : (statusInfo.prazo === 'CONCLUÍDO' ? 'Concluído' : '-'))}
                           </span>
                         </div>
                       </div>
@@ -1893,7 +1897,7 @@ export default function Debitos() {
                 </tr>
               ) : (
                 filteredData.map((item) => {
-                  const flow = calculateFlow(item, notifications);
+                  const statusInfo = getStatusDebito(item, notifications);
                   return (
                     <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
                       <td className="px-8 py-5 text-sm font-bold text-crb-navy">{item.crb}</td>
@@ -1902,25 +1906,25 @@ export default function Debitos() {
                         <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs font-bold">{item.ano}</span>
                       </td>
                       <td className="px-8 py-5">
-                        <span className="font-serif font-black text-crb-navy text-xs">{flow.faseAtual}</span>
+                        <span className="font-serif font-black text-crb-navy text-xs">{statusInfo.fase}</span>
                       </td>
                       <td className="px-8 py-5">
                         <div className="flex flex-col gap-1">
                           <span className={cn(
                             "px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wider w-fit border",
-                            flow.status === 'Concluído' 
+                            statusInfo.prazo === 'CONCLUÍDO' 
                               ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
-                              : flow.status === 'Vencido' 
+                              : statusInfo.prazo === 'VENCIDO' 
                                 ? "bg-red-50 text-red-700 border-red-200" 
-                                : flow.status === 'Em prazo' && flow.diasRestantes <= 7
+                                : statusInfo.prazo === 'EM PRAZO' && statusInfo.dias <= 7 && statusInfo.dias > 0
                                   ? "bg-amber-50 text-amber-700 border-amber-200 animate-pulse"
                                   : "bg-blue-50 text-blue-700 border-blue-200"
                           )}>
-                            {flow.status}
+                            {statusInfo.prazo}
                           </span>
-                          {flow.status !== 'Concluído' && (
+                          {statusInfo.prazo !== 'CONCLUÍDO' && (
                             <span className="text-[10px] text-slate-400 font-bold">
-                              {flow.status === 'Vencido' ? `Atraso: ${flow.atrasoDias}d` : `${flow.diasRestantes}d rest.`}
+                              {statusInfo.prazo === 'VENCIDO' ? (statusInfo.dias > 0 ? `Atraso: ${statusInfo.dias}d` : 'Vencido') : (statusInfo.temDataReal && statusInfo.dias > 0 ? `${statusInfo.dias}d rest.` : '-')}
                             </span>
                           )}
                         </div>
@@ -1928,16 +1932,16 @@ export default function Debitos() {
                       <td className="px-8 py-5 text-sm font-serif font-bold text-crb-navy">{formatCurrency(item.valorCorrigido || item.valor)}</td>
                       <td className="px-8 py-5">
                         <span className={cn(
-                          "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border shadow-sm",
-                          item.statusGeral === 'Pago' 
+                          "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest border shadow-sm inline-block max-w-[220px] truncate text-center",
+                          statusInfo.isPago 
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
-                            : item.statusGeral === 'Em Negociação'
+                            : statusInfo.isNegociacao
                               ? "bg-amber-50 text-amber-700 border-amber-200"
-                              : item.statusGeral === 'Cancelado'
-                                ? "bg-slate-50 text-slate-500 border-slate-200"
-                                : "bg-red-50 text-red-700 border-red-200"
-                        )}>
-                          {item.statusGeral || 'Pendente'}
+                              : statusInfo.prazo === 'VENCIDO'
+                                ? "bg-red-50 text-red-700 border-red-200"
+                                : "bg-blue-50 text-blue-700 border-blue-200"
+                        )} title={statusInfo.situacao}>
+                          {statusInfo.situacao}
                         </span>
                         {item.statusGeral === 'Em Negociação' && item.negociacao && (
                           <div className="text-[10px] text-slate-500 mt-1 font-sans font-semibold">

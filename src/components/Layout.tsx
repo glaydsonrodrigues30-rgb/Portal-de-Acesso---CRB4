@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   CreditCard, 
@@ -24,25 +24,33 @@ interface SidebarItemProps {
   icon: React.ElementType;
   label: string;
   onClick?: () => void;
+  activePaths?: string[];
 }
 
-function SidebarItem({ to, icon: Icon, label, onClick }: SidebarItemProps) {
+function SidebarItem({ to, icon: Icon, label, onClick, activePaths }: SidebarItemProps) {
+  const location = useLocation();
+  const currentPath = location.pathname;
+
+  const isActive = activePaths 
+    ? activePaths.includes(currentPath) || activePaths.some(p => p !== '/' && currentPath.startsWith(p))
+    : to === '/' 
+      ? currentPath === '/' 
+      : currentPath === to || currentPath.startsWith(`${to}/`);
+
   return (
-    <NavLink
+    <Link
       to={to}
       onClick={onClick}
-      className={({ isActive }) =>
-        cn(
-          "flex items-center gap-3 px-4 py-3.5 text-sm font-bold transition-all rounded-xl",
-          isActive 
-            ? "bg-gradient-to-r from-crb-blue to-crb-purple text-white shadow-lg shadow-crb-blue/20" 
-            : "text-white/60 hover:bg-white/5 hover:text-crb-blue"
-        )
-      }
+      className={cn(
+        "flex items-center gap-3 px-4 py-3.5 text-sm font-bold transition-all rounded-xl",
+        isActive 
+          ? "bg-gradient-to-r from-crb-blue to-crb-purple text-white shadow-lg shadow-crb-blue/20" 
+          : "text-white/60 hover:bg-white/5 hover:text-crb-blue"
+      )}
     >
       <Icon size={20} className="transition-transform group-hover:scale-110" />
       <span>{label}</span>
-    </NavLink>
+    </Link>
   );
 }
 
@@ -110,7 +118,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <div className="pt-6 mt-6 border-t border-white/10 space-y-2">
               <span className="px-4 text-[10px] uppercase font-bold text-white/40 tracking-[0.3em]">Administração</span>
               <SidebarItem to="/usuarios" icon={Users} label="Controle de Usuários" onClick={() => setIsMobileMenuOpen(false)} />
-              <SidebarItem to="/importar" icon={Database} label="Carga de Dados" onClick={() => setIsMobileMenuOpen(false)} />
+              <SidebarItem 
+                to="/importar" 
+                activePaths={['/importar', '/importacao', '/carga']} 
+                icon={Database} 
+                label="Carga de Dados" 
+                onClick={() => setIsMobileMenuOpen(false)} 
+              />
               <SidebarItem to="/auditoria" icon={History} label="Logs de Auditoria" onClick={() => setIsMobileMenuOpen(false)} />
             </div>
           )}

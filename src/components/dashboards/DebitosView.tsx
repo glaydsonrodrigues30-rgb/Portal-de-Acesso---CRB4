@@ -8,9 +8,16 @@ import {
 } from 'recharts';
 import { CreditCard, DollarSign, Activity, AlertCircle, TrendingDown, Mail, Shield, AlertTriangle, ShieldCheck, Hourglass, CheckCircle2, ChevronRight, HelpCircle, Clock } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { calculateFlow } from '../../lib/flowEngine';
+import { getStatusDebito, parseDateSafely } from '../../lib/statusDebito';
 
 const COLORS = ['#1e3a8a', '#3b82f6', '#ef4444', '#10b981', '#7c3aed'];
+
+const formatShortCurrency = (val: number) => {
+  if (!val || isNaN(val)) return 'R$ 0';
+  if (Math.abs(val) >= 1000000) return `R$ ${(val / 1000000).toFixed(1)}M`;
+  if (Math.abs(val) >= 1000) return `R$ ${(val / 1000).toFixed(0)}k`;
+  return `R$ ${val.toFixed(0)}`;
+};
 
 export default function DebitosView() {
   const [stats, setStats] = useState<any>(null);
@@ -31,24 +38,10 @@ export default function DebitosView() {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        const parseDate = (d: any) => {
-          if (!d) return null;
-          if (d instanceof Date) return d;
-          const s = String(d);
-          if (s.includes('/')) {
-            const [dia, mes, ano] = s.split('/');
-            return new Date(`${ano}-${mes}-${dia}`);
-          }
-          return new Date(s);
-        };
-
         let valorTotal = 0;
         let valorCorrigido = 0;
         let vencidosCount = 0;
         let antigosCount = 0;
-        const statusMap: any = {};
-        const yearMap: any = {};
-        const yearValueMap: any = {};
         const fiveYearsAgo = (new Date().getFullYear()) - 5;
 
         // Flow control metrics
@@ -74,41 +67,121 @@ export default function DebitosView() {
           'CADIN': 0
         };
 
+        // 1. Aging da carteira por faixa em valor R$ (a vencer, 0 a 90 dias, 91 a 365 dias, 1 a 3 anos, mais de 3 anos)
+        const agingMap: Record<string, { valor: number; quantidade: number; color: string }> = {
+          'A Vencer': { valor: 0, quantidade: 0, color: '#10b981' },
+          '0 a 90 dias': { valor: 0, quantidade: 0, color: '#3b82f6' },
+          '91 a 365 dias': { valor: 0, quantidade: 0, color: '#6366f1' },
+          '1 a 3 anos': { valor: 0, quantidade: 0, color: '#f59e0b' },
+          'Mais de 3 anos': { valor: 0, quantidade: 0, color: '#ef4444' }
+        };
+
+        // 2. Funil por fase do fluxo com a quantidade de débitos
+        const funnelOrder = [
+          'Aguardando Notificação',
+          'Notificação',
+          'Protesto',
+          'Comunicação CADIN',
+          'Aguardando inclusão CADIN',
+          'CADIN'
+        ];
+        const funnelMap: Record<string, { quantidade: number; valor: number; color: string }> = {
+          'Aguardando Notificação': { quantidade: 0, valor: 0, color: '#64748b' },
+          'Notificação': { quantidade: 0, valor: 0, color: '#2563eb' },
+          'Protesto': { quantidade: 0, valor: 0, color: '#7c3aed' },
+          'Comunicação CADIN': { quantidade: 0, valor: 0, color: '#0284c7' },
+          'Aguardando inclusão CADIN': { quantidade: 0, valor: 0, color: '#ea580c' },
+          'CADIN': { quantidade: 0, valor: 0, color: '#dc2626' }
+        };
+
+        // 3. Valor em aberto por exercício (ano)
+        const anoAbertoMap: Record<string, { valor: number; quantidade: number }> = {};
+
         const flowDetailsList: any[] = [];
 
         allDebits.forEach((d: any) => {
-          valorTotal += Number(d.valor || 0);
+          const vOriginal = Number(d.valor || 0);
           const vCorrigido = Number(d.valorCorrigido || d.valor || 0);
+          valorTotal += vOriginal;
           valorCorrigido += vCorrigido;
           
-          const vDate = parseDate(d.dataVencimento);
-          const status = String(d.situacao || d.status || d.statusGeral || '').toLowerCase();
-          const isVencido = vDate && vDate < today && status !== "pago" && status !== "regularizado";
+          // Flow and status calculations using central motor
+          const statusInfo = getStatusDebito(d as any, notifications);
+          const isVencido = statusInfo.prazo === 'VENCIDO';
           
           if (isVencido) vencidosCount++;
           if (Number(d.ano) <= fiveYearsAgo) antigosCount++;
 
-          const statusLabel = isVencido ? 'Vencido' : (status === 'pago' || status === 'regularizado' ? 'Regularizado' : 'Em Aberto');
-          statusMap[statusLabel] = (statusMap[statusLabel] || 0) + 1;
-          
-          const ano = d.ano || 'S/A';
-          yearMap[ano] = (yearMap[ano] || 0) + 1;
-          yearValueMap[ano] = (yearValueMap[ano] || 0) + vCorrigido;
+          // Process open debts for the 3 charts
+          if (!statusInfo.isPago && statusInfo.situacao !== 'CANCELADO') {
+            // Chart 1: Aging da Carteira
+            let faixa = 'A Vencer';
+            if (statusInfo.prazo === 'VENCIDO') {
+              let diasAtraso = 0;
+              const vDate = parseDateSafely(d.dataVencimento);
+              if (vDate) {
+                diasAtraso = Math.max(0, Math.round((today.getTime() - vDate.getTime()) / (1000 * 60 * 60 * 24)));
+              } else if (d.ano) {
+                const yearDiff = today.getFullYear() - Number(d.ano);
+                if (yearDiff >= 4) diasAtraso = 1200;
+                else if (yearDiff >= 2) diasAtraso = 730;
+                else if (yearDiff === 1) diasAtraso = 200;
+                else diasAtraso = statusInfo.dias || 30;
+              } else {
+                diasAtraso = statusInfo.dias || statusInfo.atrasoDias || 0;
+              }
 
-          // Flow calculations
-          const flow = calculateFlow(d as any, notifications);
-          faseMap[flow.faseAtual] = (faseMap[flow.faseAtual] || 0) + 1;
-          faseValorMap[flow.faseAtual] = (faseValorMap[flow.faseAtual] || 0) + vCorrigido;
+              if (diasAtraso <= 90) {
+                faixa = '0 a 90 dias';
+              } else if (diasAtraso <= 365) {
+                faixa = '91 a 365 dias';
+              } else if (diasAtraso <= 1095) {
+                faixa = '1 a 3 anos';
+              } else {
+                faixa = 'Mais de 3 anos';
+              }
+            } else {
+              faixa = 'A Vencer';
+            }
 
-          if (flow.faseAtual === 'Comunicação CADIN') {
+            if (agingMap[faixa]) {
+              agingMap[faixa].valor += vCorrigido;
+              agingMap[faixa].quantidade += 1;
+            }
+
+            // Chart 2: Funil por fase do fluxo
+            const fase = statusInfo.fase || 'Aguardando Notificação';
+            if (funnelMap[fase]) {
+              funnelMap[fase].quantidade += 1;
+              funnelMap[fase].valor += vCorrigido;
+            }
+
+            // Chart 3: Valor em aberto por exercício
+            let ano = d.ano ? String(d.ano).trim() : '';
+            if (!ano) {
+              const vDate = parseDateSafely(d.dataVencimento);
+              if (vDate) ano = String(vDate.getFullYear());
+              else ano = 'S/A';
+            }
+            if (!anoAbertoMap[ano]) {
+              anoAbertoMap[ano] = { valor: 0, quantidade: 0 };
+            }
+            anoAbertoMap[ano].valor += vCorrigido;
+            anoAbertoMap[ano].quantidade += 1;
+          }
+
+          faseMap[statusInfo.fase] = (faseMap[statusInfo.fase] || 0) + 1;
+          faseValorMap[statusInfo.fase] = (faseValorMap[statusInfo.fase] || 0) + vCorrigido;
+
+          if (statusInfo.fase === 'Comunicação CADIN') {
             emComunicacaoCadinCount++;
-          } else if (flow.faseAtual === 'Aguardando inclusão CADIN') {
+          } else if (statusInfo.fase === 'Aguardando inclusão CADIN') {
             aguardandoInclusaoCadinCount++;
           }
 
-          if (flow.status === 'Vencido') {
+          if (statusInfo.prazo === 'VENCIDO') {
             fluxoVencidoCount++;
-          } else if (flow.status === 'Em prazo' && flow.diasRestantes > 0 && flow.diasRestantes <= 7) {
+          } else if (statusInfo.prazo === 'EM PRAZO' && statusInfo.dias > 0 && statusInfo.dias <= 7) {
             fluxoProximoVencimentoCount++;
           }
 
@@ -117,23 +190,38 @@ export default function DebitosView() {
             crb: d.crb,
             nome: d.nome,
             valor: vCorrigido,
-            flow
+            flow: statusInfo
           });
         });
 
-        const statusData = Object.entries(statusMap).map(([name, value]) => ({ 
-          name, 
-          value,
-          percent: ((value as number) / allDebits.length * 100).toFixed(1)
+        // Datasets for the 3 charts
+        const agingData = Object.entries(agingMap).map(([name, item]) => ({
+          name,
+          valor: item.valor,
+          quantidade: item.quantidade,
+          color: item.color
         }));
 
-        const yearData = Object.entries(yearMap)
-          .map(([name, count]) => ({ 
-            name: name.toString(), 
-            count: count as number,
-            value: yearValueMap[name] || 0
+        const funnelData = funnelOrder.map(faseName => ({
+          name: faseName,
+          quantidade: funnelMap[faseName]?.quantidade || 0,
+          valor: funnelMap[faseName]?.valor || 0,
+          color: funnelMap[faseName]?.color || '#1e3a8a'
+        }));
+
+        const exercicioData = Object.entries(anoAbertoMap)
+          .map(([name, item]) => ({
+            name,
+            valor: item.valor,
+            quantidade: item.quantidade
           }))
-          .sort((a, b) => parseInt(a.name) - parseInt(b.name));
+          .sort((a, b) => {
+            const numA = parseInt(a.name, 10);
+            const numB = parseInt(b.name, 10);
+            if (isNaN(numA)) return 1;
+            if (isNaN(numB)) return -1;
+            return numA - numB;
+          });
 
         const flowStatsData = Object.entries(faseMap).map(([name, value]) => ({
           name,
@@ -147,9 +235,8 @@ export default function DebitosView() {
           .sort((a: any, b: any) => (b.valorCorrigido || 0) - (a.valorCorrigido || 0))
           .slice(0, 5)
           .map((d: any) => {
-            const vDate = parseDate(d.dataVencimento);
-            const status = String(d.situacao || d.status || d.statusGeral || '').toLowerCase();
-            const isVencido = vDate && vDate < today && status !== "pago" && status !== "regularizado";
+            const statusInfo = getStatusDebito(d as any, notifications);
+            const isVencido = statusInfo.prazo === 'VENCIDO';
             return {
               crb: d.crb,
               nome: d.nome,
@@ -165,8 +252,9 @@ export default function DebitosView() {
           vencidos: vencidosCount,
           antigos: antigosCount,
           ranking,
-          statusData,
-          yearData,
+          agingData,
+          funnelData,
+          exercicioData,
           // Flow stats
           fluxoVencidoCount,
           fluxoProximoVencimentoCount,
@@ -341,80 +429,192 @@ export default function DebitosView() {
         </div>
       </div>
 
-      {/* Analytics Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 transition-all hover:shadow-2xl overflow-hidden">
-          <h4 className="text-xl font-serif font-black text-crb-navy mb-8 px-2 border-l-4 border-crb-blue pl-4">Débitos por Status</h4>
-          <div className="w-full h-[300px] min-h-[300px] flex items-center justify-center">
-             {stats.statusData.length > 0 ? (
-               <ResponsiveContainer width="99%" height="100%">
-                 <PieChart>
-                   <Pie 
-                    data={stats.statusData} 
-                     innerRadius={60} 
-                     outerRadius={100} 
-                     paddingAngle={8} 
-                     dataKey="value"
-                     stroke="none"
-                   >
-                     {stats.statusData.map((_: any, i: any) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                   </Pie>
-                   <Tooltip 
-                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
-                     formatter={(value: any, name: any, props: any) => [`${value} (${props.payload.percent}%)`, name]}
-                   />
-                   <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                 </PieChart>
-               </ResponsiveContainer>
-             ) : (
-               <div className="text-slate-400 font-bold italic text-sm text-center">
-                 Sem dados suficientes para exibição de status
-               </div>
-             )}
+      {/* 3 Gráficos Analíticos com dados reais e getStatusDebito */}
+      <div className="space-y-8">
+        <div>
+          <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.3em] mb-2 flex items-center gap-3">
+            <span className="w-8 h-[2px] bg-crb-navy"></span>
+            Diagnóstico Analítico da Carteira
+          </h3>
+        </div>
+
+        {/* Row 1: Aging da Carteira + Funil por Fase do Fluxo */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Gráfico 1: Aging da Carteira por Faixa em Valor R$ */}
+          <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 flex flex-col justify-between">
+            <div className="mb-6 border-l-4 border-crb-blue pl-4">
+              <h4 className="text-xl font-serif font-black text-crb-navy">Aging da Carteira (Valor em R$)</h4>
+              <p className="text-xs text-slate-400 font-medium mt-1">Montante financeiro em aberto segmentado por faixa de atraso</p>
+            </div>
+
+            <div className="w-full h-[320px] min-h-[320px] flex items-center justify-center">
+              {stats.agingData && stats.agingData.some((d: any) => d.valor > 0 || d.quantidade > 0) ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <BarChart data={stats.agingData} margin={{ top: 20, right: 15, left: 10, bottom: 25 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis 
+                      dataKey="name" 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
+                    />
+                    <YAxis 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tickFormatter={formatShortCurrency}
+                      tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
+                    />
+                    <Tooltip 
+                      cursor={{ fill: '#f8fafc' }}
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          const item = payload[0].payload;
+                          return (
+                            <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 min-w-[200px]">
+                              <p className="font-black text-crb-navy mb-2 text-sm">{item.name}</p>
+                              <div className="space-y-1.5">
+                                <p className="text-xs font-bold text-emerald-600 flex justify-between gap-4">
+                                  <span className="text-slate-500 font-semibold">Valor em Aberto:</span>
+                                  <span className="font-black tabular-nums">{formatCurrency(item.valor)}</span>
+                                </p>
+                                <p className="text-xs font-bold text-slate-700 flex justify-between gap-4">
+                                  <span className="text-slate-500 font-semibold">Volume de Débitos:</span>
+                                  <span className="font-black tabular-nums">{item.quantidade} débitos</span>
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar dataKey="valor" radius={[8, 8, 0, 0]} maxBarSize={48}>
+                      {stats.agingData.map((entry: any, index: number) => (
+                        <Cell key={`cell-aging-${index}`} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                  <AlertCircle size={32} className="text-slate-300 mb-2" />
+                  <p className="font-bold text-sm">Sem dados suficientes para o aging da carteira</p>
+                  <p className="text-xs text-slate-400 mt-1">Os débitos em aberto serão exibidos aqui.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Gráfico 2: Funil por Fase do Fluxo com Quantidade de Débitos */}
+          <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 flex flex-col justify-between">
+            <div className="mb-6 border-l-4 border-crb-purple pl-4">
+              <h4 className="text-xl font-serif font-black text-crb-navy">Funil por Fase do Fluxo (Quantidade)</h4>
+              <p className="text-xs text-slate-400 font-medium mt-1">Volume de débitos em cada etapa institucional do fluxo de cobrança</p>
+            </div>
+
+            <div className="w-full h-[320px] min-h-[320px] flex items-center justify-center">
+              {stats.funnelData && stats.funnelData.some((d: any) => d.quantidade > 0) ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <BarChart data={stats.funnelData} margin={{ top: 20, right: 15, left: 10, bottom: 45 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis 
+                      dataKey="name" 
+                      axisLine={false} 
+                      tickLine={false} 
+                      interval={0}
+                      angle={-20}
+                      textAnchor="end"
+                      height={50}
+                      tick={{ fill: '#64748b', fontSize: 10, fontWeight: 700 }}
+                    />
+                    <YAxis 
+                      axisLine={false} 
+                      tickLine={false} 
+                      allowDecimals={false}
+                      tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
+                    />
+                    <Tooltip 
+                      cursor={{ fill: '#f8fafc' }}
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          const item = payload[0].payload;
+                          return (
+                            <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 min-w-[220px]">
+                              <p className="font-black text-crb-navy mb-2 text-sm">{item.name}</p>
+                              <div className="space-y-1.5">
+                                <p className="text-xs font-bold text-crb-blue flex justify-between gap-4">
+                                  <span className="text-slate-500 font-semibold">Quantidade:</span>
+                                  <span className="font-black tabular-nums">{item.quantidade} débitos</span>
+                                </p>
+                                <p className="text-xs font-bold text-emerald-600 flex justify-between gap-4">
+                                  <span className="text-slate-500 font-semibold">Valor Acumulado:</span>
+                                  <span className="font-black tabular-nums">{formatCurrency(item.valor)}</span>
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar dataKey="quantidade" radius={[8, 8, 0, 0]} maxBarSize={48}>
+                      {stats.funnelData.map((entry: any, index: number) => (
+                        <Cell key={`cell-funnel-${index}`} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                  <AlertCircle size={32} className="text-slate-300 mb-2" />
+                  <p className="font-bold text-sm">Sem débitos cadastrados no fluxo de cobrança</p>
+                  <p className="text-xs text-slate-400 mt-1">O funil por fase será preenchido automaticamente.</p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40 transition-all hover:shadow-2xl overflow-hidden">
-          <h4 className="text-xl font-serif font-black text-crb-navy mb-8 px-2 border-l-4 border-crb-purple pl-4">Distribuição por Ano (Valor)</h4>
-          <div className="w-full h-[300px] min-h-[300px] flex items-center justify-center">
-            {stats.yearData.length > 0 ? (
+        {/* Row 2: Gráfico 3 - Valor em Aberto por Exercício */}
+        <div className="bg-white p-6 sm:p-8 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40">
+          <div className="mb-6 border-l-4 border-emerald-600 pl-4">
+            <h4 className="text-xl font-serif font-black text-crb-navy">Valor em Aberto por Exercício</h4>
+            <p className="text-xs text-slate-400 font-medium mt-1">Soma financeira dos débitos em cobrança agrupada por ano de competência</p>
+          </div>
+
+          <div className="w-full h-[320px] min-h-[320px] flex items-center justify-center">
+            {stats.exercicioData && stats.exercicioData.some((d: any) => d.valor > 0) ? (
               <ResponsiveContainer width="99%" height="100%">
-                <BarChart data={stats.yearData}>
+                <BarChart data={stats.exercicioData} margin={{ top: 20, right: 15, left: 10, bottom: 25 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis 
                     dataKey="name" 
                     axisLine={false} 
                     tickLine={false} 
-                    tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }}
+                    tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
                   />
                   <YAxis 
                     axisLine={false} 
                     tickLine={false} 
-                    tickFormatter={(val) => `R$${(val / 1000).toFixed(0)}k`}
-                    tick={{ fill: '#94a3b8', fontSize: 12, fontWeight: 700 }}
+                    tickFormatter={formatShortCurrency}
+                    tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
                   />
                   <Tooltip 
-                    cursor={{fill: '#f8fafc'}} 
-                    contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
-                    formatter={(val: any, name: any, props: any) => {
-                      if (name === 'value') return [formatCurrency(val), 'Valor Total'];
-                      return [val, name];
-                    }}
-                    labelFormatter={(label) => `Ano: ${label}`}
-                    content={({ active, payload, label }) => {
+                    cursor={{ fill: '#f8fafc' }}
+                    content={({ active, payload }) => {
                       if (active && payload && payload.length) {
-                        const data = payload[0].payload;
+                        const item = payload[0].payload;
                         return (
-                          <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100">
-                            <p className="font-black text-crb-navy mb-2">Ano {label}</p>
-                            <div className="space-y-1">
-                              <p className="text-sm font-bold text-emerald-600 flex justify-between gap-4">
-                                <span>Valor:</span>
-                                <span>{formatCurrency(data.value)}</span>
+                          <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 min-w-[220px]">
+                            <p className="font-black text-crb-navy mb-2 text-sm">Exercício {item.name}</p>
+                            <div className="space-y-1.5">
+                              <p className="text-xs font-bold text-emerald-600 flex justify-between gap-4">
+                                <span className="text-slate-500 font-semibold">Valor em Aberto:</span>
+                                <span className="font-black tabular-nums">{formatCurrency(item.valor)}</span>
                               </p>
-                              <p className="text-xs text-slate-500 font-bold flex justify-between gap-4">
-                                <span>Quantidade:</span>
-                                <span>{data.count} débitos</span>
+                              <p className="text-xs font-bold text-slate-700 flex justify-between gap-4">
+                                <span className="text-slate-500 font-semibold">Volume de Débitos:</span>
+                                <span className="font-black tabular-nums">{item.quantidade} débitos</span>
                               </p>
                             </div>
                           </div>
@@ -423,12 +623,14 @@ export default function DebitosView() {
                       return null;
                     }}
                   />
-                  <Bar dataKey="value" fill="#1e3a8a" radius={[6, 6, 0, 0]} barSize={40} />
+                  <Bar dataKey="valor" fill="#1e3a8a" radius={[8, 8, 0, 0]} maxBarSize={48} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <div className="text-slate-400 font-bold italic text-sm text-center">
-                Sem dados suficientes para exibição temporal
+              <div className="flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                <AlertCircle size={32} className="text-slate-300 mb-2" />
+                <p className="font-bold text-sm">Sem valores em aberto registrados por exercício</p>
+                <p className="text-xs text-slate-400 mt-1">Os débitos por ano serão exibidos conforme cadastrados.</p>
               </div>
             )}
           </div>

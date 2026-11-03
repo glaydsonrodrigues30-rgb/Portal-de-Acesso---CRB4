@@ -73,14 +73,13 @@ import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 
 export async function logAuditoria(acao: 'CRIACAO' | 'EDICAO' | 'EXCLUSAO' | 'IMPORTACAO', modulo: string, entidadeId: string, alteracoes: any = {}) {
   try {
-    const savedSession = localStorage.getItem('crb4_session');
-    if (!savedSession) return;
-    const { uid, email, username } = JSON.parse(savedSession);
+    const user = auth.currentUser;
+    if (!user) return;
     
     await addDoc(collection(db, "auditoria"), {
-      userId: uid,
-      userEmail: email || 'N/A',
-      userName: username || 'Sistema',
+      userId: user.uid,
+      userEmail: user.email || 'N/A',
+      userName: user.displayName || user.email || 'Usuário',
       acao,
       modulo,
       entidadeId,

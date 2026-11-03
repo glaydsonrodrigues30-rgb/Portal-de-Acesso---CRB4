@@ -1,44 +1,107 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 0. Default Deny
+    // 0. Default Deny: All access blocked by default
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // --- Helpers ---
-    function isSignedIn() { return request.auth != null; }
-    // Note: Since we are using custom session management (localStorage), 
-    // we don't have a request.auth.uid for most operations.
-    // However, we can use the "isOwner" logic by checking the ID passed in the request if we were using Auth.
-    // Since we aren't using Firebase Auth for standard operations, we will rely on data checks if possible.
-    
-    // For this specific app's simplified auth:
-    function isAdmin(userData) { return userData.perfil == 'ADMIN'; }
-
-    // --- Collections ---
-
-    match /users/{userId} {
-      // Allow get for everyone (needed for seeding check and login lookup)
-      allow get: if true;
-      
-      // Allow list ONLY for searching by username (limit 1)
-      allow list: if request.query.limit == 1;
-
-      // Allow seeding the specific admin if it doesn't exist
-      allow create: if (userId == 'admin_glaydson' || userId == 'admin_crb4') && !exists(/databases/$(database)/documents/users/$(userId));
-      
-      // Allow admins to manage users (This is tricky without request.auth)
-      // For now, let's allow read for all authenticated (in our custom sense) or just keep it open for development if needed.
-      // But let's try to be a bit more secure:
-      allow read, write: if true; // Temporary while we stabilize the custom auth
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    match /debits/{debitoId} { allow read, write: if true; }
-    match /notifications/{notificacaoId} { allow read, write: if true; }
-    match /negotiations/{negociacaoId} { allow read, write: if true; }
-    match /oficios/{oficioId} { allow read, write: if true; }
-    match /processos/{processoId} { allow read, write: if true; }
-    match /auditoria/{logId} { allow read, write: if true; }
+    // Identifies the initial root admin via verified auth email and active admin document
+    function isGlaydsonAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email == 'glaydson.rodrigues30@gmail.com' &&
+        exists(/databases/$(database)/documents/users/admin_glaydson) &&
+        get(/databases/$(database)/documents/users/admin_glaydson).data.status == 'ATIVO';
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Valid profile requires authentication, status == 'ATIVO', and recognized perfil
+    function hasValidProfile() {
+      return isSignedIn() && (
+        (hasUserDoc() && getUserData().status == 'ATIVO' && getUserData().perfil in ['ADMIN', 'OPERACIONAL', 'VISUALIZADOR'])
+        || isGlaydsonAdmin()
+      );
+    }
+
+    function getUserRole() {
+      return hasUserDoc()
+        ? getUserData().perfil
+        : (isGlaydsonAdmin() ? 'ADMIN' : 'NONE');
+    }
+
+    function isAdmin() {
+      return hasValidProfile() && (getUserRole() == 'ADMIN' || isGlaydsonAdmin());
+    }
+
+    function isOperacional() {
+      return hasValidProfile() && (getUserRole() == 'OPERACIONAL' || isAdmin());
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      // Authenticated users with valid profile can read user records
+      allow read: if hasValidProfile();
+
+      // Only an existing admin can create users.
+      // Glaydson can also initialize his own UID record if it matches his email.
+      // Self-promotion to admin by non-admins is strictly prevented.
+      allow create: if (isAdmin() && request.resource.data.perfil in ['ADMIN', 'OPERACIONAL', 'VISUALIZADOR'])
+                   || (isSignedIn() && request.auth.uid == userId && isGlaydsonAdmin() && request.resource.data.perfil == 'ADMIN');
+
+      // Only an existing admin can update user documents
+      allow update: if isAdmin()
+                   && request.resource.data.perfil in ['ADMIN', 'OPERACIONAL', 'VISUALIZADOR'];
+
+      // Only admin can delete users, and cannot delete themselves
+      allow delete: if isAdmin() && userId != request.auth.uid;
+    }
+
+    // --- Operational Collections ---
+    // Read allowed for any user with valid profile (including VISUALIZADOR).
+    // Write (create, update, delete) allowed ONLY for OPERACIONAL and ADMIN.
+    match /debits/{debitoId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isOperacional();
+    }
+
+    match /notifications/{notificacaoId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isOperacional();
+    }
+
+    match /negotiations/{negociacaoId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isOperacional();
+    }
+
+    match /oficios/{oficioId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isOperacional();
+    }
+
+    match /processos/{processoId} {
+      allow read: if hasValidProfile();
+      allow create, update, delete: if isOperacional();
+    }
+
+    // --- Audit Trail (auditoria) ---
+    // Immutable audit logs: any authenticated user with valid profile can append, none can modify or delete
+    match /auditoria/{logId} {
+      allow read: if hasValidProfile();
+      allow create: if hasValidProfile();
+      allow update, delete: if false;
+    }
   }
 }

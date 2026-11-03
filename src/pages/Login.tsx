@@ -1,16 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../lib/AuthContext';
-import { ShieldCheck, LogIn } from 'lucide-react';
-import { motion } from 'motion/react';
+import { ShieldCheck, LogIn, Mail, Key, ArrowRight, X, CheckCircle2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 
 export default function Login() {
-  const { login, userData, currentUser } = useAuth();
+  const { login, resetPassword, userData, currentUser } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  // Modal "Esqueci minha senha"
+  const [isResetOpen, setIsResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetSuccess, setResetSuccess] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
 
   useEffect(() => {
     if (currentUser && userData?.status === 'ATIVO') {
@@ -20,23 +27,40 @@ export default function Login() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username || !password) {
-      setError('Por favor, preencha todos os campos.');
+    if (!email || !password) {
+      setError('Por favor, informe seu e-mail e senha.');
       return;
     }
     try {
       setError(null);
       setIsAuthenticating(true);
-      await login(username, password);
+      await login(email, password);
     } catch (err: any) {
-      setError(err.message || 'Usuário ou senha incorretos.');
+      setError(err.message || 'E-mail ou senha incorretos.');
       console.error(err);
       setIsAuthenticating(false);
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetEmail) {
+      setResetError('Por favor, informe seu e-mail institucional.');
+      return;
+    }
+    try {
+      setResetLoading(true);
+      setResetError(null);
+      await resetPassword(resetEmail);
+      setResetSuccess(true);
+    } catch (err: any) {
+      setResetError(err.message || 'Erro ao enviar link de redefinição.');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   if (currentUser && userData?.status === 'INATIVO') {
-    // ... (rest of the blocked screen remains same)
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
         <motion.div 
@@ -50,7 +74,7 @@ export default function Login() {
           </div>
           <h2 className="text-3xl font-serif font-bold text-crb-navy mb-4">Acesso Restrito</h2>
           <p className="text-slate-500 mb-8 leading-relaxed font-medium">
-            Sua conta (<span className="text-crb-navy font-bold">{currentUser.username || currentUser.email}</span>) está pendente de homologação. Contate o suporte administrativo para ativação imediata.
+            Sua conta (<span className="text-crb-navy font-bold">{currentUser.email}</span>) está inativa ou pendente de homologação. Contate a administração do CRB-4.
           </p>
           <button 
             onClick={() => window.location.reload()}
@@ -64,7 +88,7 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F9FC] flex items-center justify-center p-6 md:p-12 font-sans">
+    <div className="min-h-screen bg-[#F7F9FC] flex items-center justify-center p-6 md:p-12 font-sans relative">
       <div className="max-w-2xl w-full flex flex-col items-center">
         {/* Logo Section */}
         <motion.div
@@ -105,41 +129,61 @@ export default function Login() {
                 animate={{ height: 'auto', opacity: 1 }}
                 className="bg-red-50 text-red-700 p-4 rounded-xl mb-6 text-sm border border-red-100 font-bold flex items-center gap-3 shadow-sm"
               >
-                <div className="w-2.5 h-2.5 bg-red-600 rounded-full animate-pulse"></div>
-                {error}
+                <div className="w-2.5 h-2.5 bg-red-600 rounded-full animate-pulse shrink-0"></div>
+                <span>{error}</span>
               </motion.div>
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Usuário ou E-mail</label>
-              <input 
-                required
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3.5 px-6 rounded-2xl focus:border-crb-blue outline-none transition-all"
-                placeholder="Ex: glaydson.rodrigues30@gmail.com ou Glaydson"
-                autoComplete="username"
-              />
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">E-mail de Acesso</label>
+              <div className="relative">
+                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input 
+                  required
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3.5 pl-12 pr-6 rounded-2xl focus:border-crb-blue outline-none transition-all placeholder:text-slate-400 text-sm"
+                  placeholder="nome.sobrenome@crb4.org.br"
+                  autoComplete="email"
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Senha</label>
-              <input 
-                required
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3.5 px-6 rounded-2xl focus:border-crb-blue outline-none transition-all"
-                placeholder="••••••••"
-                autoComplete="current-password"
-              />
+              <div className="flex justify-between items-center ml-1">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Senha</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetEmail(email);
+                    setResetSuccess(false);
+                    setResetError(null);
+                    setIsResetOpen(true);
+                  }}
+                  className="text-xs font-bold text-crb-blue hover:text-crb-navy transition-colors focus:outline-none"
+                >
+                  Esqueci minha senha
+                </button>
+              </div>
+              <div className="relative">
+                <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input 
+                  required
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3.5 pl-12 pr-6 rounded-2xl focus:border-crb-blue outline-none transition-all text-sm"
+                  placeholder="••••••••"
+                  autoComplete="current-password"
+                />
+              </div>
             </div>
 
             <button
               type="submit"
               disabled={isAuthenticating}
-              className="w-full flex items-center justify-center gap-4 bg-crb-navy text-white font-bold py-4 px-6 rounded-2xl hover:bg-crb-navy-dark transition-all shadow-lg shadow-crb-navy/20 active:scale-[0.98] disabled:opacity-50 mt-8 group"
+              className="w-full flex items-center justify-center gap-4 bg-crb-navy text-white font-bold py-4 px-6 rounded-2xl hover:bg-crb-navy-dark transition-all shadow-lg shadow-crb-navy/20 active:scale-[0.98] disabled:opacity-50 mt-8 group cursor-pointer"
             >
               {isAuthenticating ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -150,16 +194,118 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-16 pt-10 border-t border-slate-100 text-center">
-            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mb-4">
+          <div className="mt-14 pt-8 border-t border-slate-100 text-center">
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] mb-2">
               Conselho Regional de Biblioteconomia - 4ª Região
             </p>
-            <p className="text-[10px] text-slate-300 font-medium">
-              Acesso monitorado. O uso não autorizado está sujeito a penalidades administrativas e legais.
+            <p className="text-[10px] text-slate-400 font-medium">
+              Acesso monitorado. Uso restrito a operadores e administradores autorizados.
             </p>
           </div>
         </motion.div>
       </div>
+
+      {/* Modal Esqueci minha Senha */}
+      <AnimatePresence>
+        {isResetOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border border-slate-100 relative"
+            >
+              <button 
+                onClick={() => setIsResetOpen(false)}
+                className="absolute top-6 right-6 text-slate-400 hover:text-slate-600 transition-colors"
+                aria-label="Fechar"
+              >
+                <X size={20} />
+              </button>
+
+              <div className="w-12 h-12 bg-blue-50 text-crb-blue rounded-2xl flex items-center justify-center mb-6 border border-blue-100">
+                <Key size={24} />
+              </div>
+
+              <h3 className="text-2xl font-serif font-bold text-crb-navy mb-2">Recuperar Senha</h3>
+              <p className="text-sm text-slate-500 mb-6 font-medium">
+                Informe o seu e-mail institucional cadastrado. Enviaremos um link seguro para você definir uma senha forte no Firebase Authentication.
+              </p>
+
+              {resetSuccess ? (
+                <div className="space-y-6">
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 text-emerald-800 flex items-start gap-3">
+                    <CheckCircle2 size={24} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="font-bold mb-1">E-mail de redefinição enviado!</p>
+                      <p className="text-emerald-700 leading-relaxed">
+                        Verifique a caixa de entrada (e a pasta de spam) de <strong>{resetEmail}</strong> e siga o link para definir sua nova senha.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsResetOpen(false)}
+                    className="w-full bg-crb-navy text-white font-bold py-3.5 px-6 rounded-2xl hover:bg-crb-navy-dark transition-all cursor-pointer"
+                  >
+                    Voltar ao Login
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleResetPassword} className="space-y-4">
+                  {resetError && (
+                    <div className="bg-red-50 text-red-700 p-3.5 rounded-xl text-xs border border-red-100 font-bold">
+                      {resetError}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
+                      E-mail Institucional
+                    </label>
+                    <div className="relative">
+                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <input
+                        required
+                        type="email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3 pl-12 pr-4 rounded-2xl focus:border-crb-blue outline-none transition-all placeholder:text-slate-400 text-sm"
+                        placeholder="nome.sobrenome@crb4.org.br"
+                        autoComplete="email"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => setIsResetOpen(false)}
+                      className="w-1/3 bg-slate-100 text-slate-600 font-bold py-3.5 rounded-2xl hover:bg-slate-200 transition-colors text-sm cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={resetLoading}
+                      className="w-2/3 bg-crb-navy text-white font-bold py-3.5 rounded-2xl hover:bg-crb-navy-dark transition-all flex items-center justify-center gap-2 text-sm shadow-md shadow-crb-navy/20 disabled:opacity-50 cursor-pointer"
+                    >
+                      {resetLoading ? (
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                      ) : (
+                        <>
+                          <span>Enviar Link</span>
+                          <ArrowRight size={16} />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

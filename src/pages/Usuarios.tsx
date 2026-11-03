@@ -46,7 +46,7 @@ export default function Usuarios() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingUser?.email || !editingUser?.username || !editingUser?.nome || (!editingUser?.id && !password)) return;
+    if (!editingUser?.email || !editingUser?.username || !editingUser?.nome) return;
 
     const username = editingUser.username.trim();
     
@@ -71,9 +71,6 @@ export default function Usuarios() {
       createdAt: editingUser.createdAt || new Date().toISOString(),
     };
 
-    if (password) {
-      newUser.password = password;
-    }
 
     try {
       await setDoc(doc(db, 'users', userId), newUser, { merge: true });
@@ -273,7 +270,7 @@ export default function Usuarios() {
                         value={editingUser?.username || ''}
                         onChange={(e) => setEditingUser({...editingUser, username: e.target.value})}
                         className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-medium"
-                        placeholder="Ex: glaydson"
+                        placeholder="Ex: usuario.sistema"
                       />
                     </div>
                     <div className="space-y-2">
@@ -291,19 +288,11 @@ export default function Usuarios() {
 
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
-                      {editingUser?.id ? 'Nova Senha (deixe em branco para manter)' : 'Senha de Acesso'}
+                      Definição de Acesso
                     </label>
-                    <div className="relative">
-                      <Key className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input 
-                        required={!editingUser?.id}
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="w-full bg-slate-50 border-2 border-slate-100 py-3 pl-12 pr-4 rounded-xl focus:border-crb-purple outline-none transition-all font-medium"
-                        placeholder="••••••••"
-                      />
-                    </div>
+                    <p className="text-xs text-slate-400 font-medium">
+                      O acesso é autenticado diretamente pelo Firebase Authentication. O operador receberá o convite ou poderá definir sua senha forte pelo link "Esqueci minha senha" na tela de login.
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">

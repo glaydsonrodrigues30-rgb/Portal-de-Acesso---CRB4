@@ -18,13 +18,16 @@ import {
   ChevronDown,
   Calendar,
   AlertTriangle,
-  Loader2
+  Loader2,
+  Database,
+  TrendingUp
 } from 'lucide-react';
 import { formatCurrency, formatDate, cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
 
 type ModuleType = 'debitos' | 'notificacoes' | 'negociacoes' | 'oficios' | 'processos';
 
@@ -43,6 +46,9 @@ export default function Relatorios() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
+  const [availableSituations, setAvailableSituations] = useState<string[]>([]);
+  const [notificationsList, setNotificationsList] = useState<any[]>([]);
 
   const modules = [
     { id: 'debitos', label: 'Débitos', icon: FileText, collection: 'debits' },
@@ -52,6 +58,78 @@ export default function Relatorios() {
     { id: 'processos', label: 'Processos', icon: FileSpreadsheet, collection: 'processos' },
   ];
 
+  // Carrega anos e situações reais a partir dos dados existentes
+  useEffect(() => {
+    async function loadMetadata() {
+      try {
+        const [debitosSnap, notifSnap, oficiosSnap, processosSnap] = await Promise.all([
+          getDocs(collection(db, 'debits')),
+          getDocs(collection(db, 'notifications')),
+          getDocs(collection(db, 'oficios')),
+          getDocs(collection(db, 'processos'))
+        ]);
+
+        const notifs = notifSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setNotificationsList(notifs);
+
+        const debits = debitosSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // 1. Extração dinâmica de todos os anos existentes nos dados (ex: 2012, 2018, etc.)
+        const yearsSet = new Set<number>();
+        debits.forEach((d: any) => {
+          if (d.ano && !isNaN(Number(d.ano))) {
+            yearsSet.add(Number(d.ano));
+          } else if (d.dataVencimento) {
+            const dt = parseDateSafely(d.dataVencimento);
+            if (dt) yearsSet.add(dt.getFullYear());
+          }
+        });
+        oficiosSnap.docs.forEach(doc => {
+          const a = doc.data().ano;
+          if (a && !isNaN(Number(a))) yearsSet.add(Number(a));
+        });
+        processosSnap.docs.forEach(doc => {
+          const a = doc.data().ano;
+          if (a && !isNaN(Number(a))) yearsSet.add(Number(a));
+        });
+
+        const sortedYears = Array.from(yearsSet).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
+        setAvailableYears(sortedYears.length > 0 ? sortedYears : [2026, 2025, 2024, 2023, 2022, 2021, 2020, 2018, 2012]);
+
+        // 2. Extração dinâmica das situações derivadas por getStatusDebito
+        const sitSet = new Set<string>();
+        debits.forEach((d: any) => {
+          const info = getStatusDebito(d, notifs as any);
+          if (info.situacao) {
+            sitSet.add(info.situacao);
+          }
+        });
+
+        // Garantir que as situações do fluxo institucional estejam acessíveis
+        const SITUACOES_PADRAO = [
+          'DÉBITO VENCIDO - AGUARDANDO NOTIFICAÇÃO',
+          'DÉBITO A VENCER - AGUARDANDO NOTIFICAÇÃO',
+          'NOTIFICADO - NO PRAZO DE DEFESA (30 DIAS)',
+          'NOTIFICADO - PRAZO ESGOTADO (SEM RESPOSTA)',
+          'EM PROTESTO CARTORÁRIO',
+          'PROTESTO ESGOTADO - SEM QUITAÇÃO',
+          'COMUNICADO - AGUARDANDO PRAZO CADIN (75 DIAS)',
+          'PRAZO CADIN ESGOTADO - PENDENTE DE REGISTRO',
+          'INSCRITO NO CADIN',
+          'EM NEGOCIAÇÃO / PARCELAMENTO',
+          'PAGO / REGULARIZADO',
+          'CANCELADO'
+        ];
+        SITUACOES_PADRAO.forEach(s => sitSet.add(s));
+        setAvailableSituations(Array.from(sitSet).sort());
+      } catch (e) {
+        console.error("Erro ao carregar metadados dos filtros de relatórios:", e);
+      }
+    }
+
+    loadMetadata();
+  }, []);
+
   const handleGenerateReport = async () => {
     setLoading(true);
     setGenerated(false);
@@ -59,12 +137,18 @@ export default function Relatorios() {
       const selectedModule = modules.find(m => m.id === filters.module);
       if (!selectedModule) return;
 
+      let notifs = notificationsList;
+      if (notifs.length === 0) {
+        const notifSnap = await getDocs(collection(db, 'notifications'));
+        notifs = notifSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setNotificationsList(notifs);
+      }
+
       let q = query(collection(db, selectedModule.collection));
 
-      // Apply dynamic filters based on module
+      // Apply server-side filters if direct match exists
       if (filters.module === 'debitos') {
         if (filters.ano) q = query(q, where('ano', '==', Number(filters.ano)));
-        if (filters.status) q = query(q, where('statusGeral', '==', filters.status));
       } else if (filters.module === 'notificacoes') {
         if (filters.status) q = query(q, where('status', '==', filters.status));
         if (filters.tipo) q = query(q, where('tipo', '==', filters.tipo));
@@ -81,32 +165,45 @@ export default function Relatorios() {
       const snapshot = await getDocs(q);
       let results = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // Apply Year Filter for modules that don't have a direct 'ano' field in Firestore
+      // Apply Year Filter for modules without a direct 'ano' field
       if (filters.ano) {
         const yearInt = Number(filters.ano);
         results = results.filter((item: any) => {
-          // If the item already has a direct 'ano' field, it was probably filtered server-side, 
-          // but we check here for consistency.
           if (item.ano === yearInt || Number(item.ano) === yearInt) return true;
-          
-          // Otherwise, try to extract year from common date fields used in each module
           const dateStr = item.dataEnvio || item.dataAcordo || item.dataEmissao || item.dataAbertura || item.dataVencimento || item.createdAt;
           if (dateStr) {
-            const dateObj = new Date(dateStr);
-            if (isNaN(dateObj.getTime())) return false;
-            return dateObj.getFullYear() === yearInt;
+            const dateObj = parseDateSafely(dateStr);
+            if (dateObj) return dateObj.getFullYear() === yearInt;
           }
           return false;
         });
       }
 
-      // Client-side filter for Overdue ("Vencidos") if required
-      if (filters.module === 'debitos' && filters.vencidosOnly) {
-        const today = new Date();
-        results = results.filter((item: any) => {
-          const vencimento = item.dataVencimento ? new Date(item.dataVencimento) : null;
-          return vencimento && vencimento < today && item.statusGeral !== 'Pago';
+      // Se o módulo for débitos, deriva situação e prazo usando getStatusDebito
+      if (filters.module === 'debitos') {
+        results = results.map((item: any) => {
+          const statusInfo = getStatusDebito(item, notifs as any);
+          return {
+            ...item,
+            situacao: statusInfo.situacao,
+            fase: statusInfo.fase,
+            prazo: statusInfo.prazo,
+            diasAtrasoOuRestante: statusInfo.dias,
+            inicioEstagio: statusInfo.dataInicioFormatada,
+            prazoFinal: statusInfo.prazoFinalFormatado,
+            acaoRecomendada: statusInfo.acaoRecomendada
+          };
         });
+
+        // Filtro por Situação derivada por getStatusDebito
+        if (filters.status) {
+          results = results.filter((item: any) => item.situacao === filters.status);
+        }
+
+        // Filtro por Vencidos usando a regra unificada de prazo do motor
+        if (filters.vencidosOnly) {
+          results = results.filter((item: any) => item.prazo === 'VENCIDO');
+        }
       }
 
       setData(results);
@@ -191,7 +288,7 @@ export default function Relatorios() {
               onChange={(e) => setFilters({...filters, ano: e.target.value})}
             >
               <option value="">Todos os anos</option>
-              {[2020, 2021, 2022, 2023, 2024, 2025, 2026].map(y => (
+              {availableYears.map(y => (
                 <option key={y} value={y.toString()}>{y}</option>
               ))}
             </select>
@@ -208,18 +305,17 @@ export default function Relatorios() {
             >
               {filters.module === 'debitos' && (
                 <>
-                  <div className="space-y-2">
+                  <div className="space-y-2 min-w-0">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Situação</label>
                     <select 
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy"
+                      className="w-full min-w-0 bg-slate-50 border-2 border-slate-100 py-3 px-3 sm:px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy text-xs sm:text-sm"
                       value={filters.status || ''}
                       onChange={(e) => setFilters({...filters, status: e.target.value})}
                     >
-                      <option value="">Todos</option>
-                      <option value="Pendente">Pendente</option>
-                      <option value="Pago">Pago</option>
-                      <option value="Vencido">Vencido</option>
-                      <option value="Em Negociação">Em Negociação</option>
+                      <option value="">Todas as situações</option>
+                      {availableSituations.map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="flex items-end pb-3">
@@ -383,12 +479,4 @@ export default function Relatorios() {
       </AnimatePresence>
     </div>
   );
-}
-
-function Database({ size }: { size: number }) {
-  return <FileSpreadsheet size={size} />;
-}
-
-function TrendingUp({ size }: { size: number }) {
-  return <Download size={size} />;
 }

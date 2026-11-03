@@ -57,6 +57,16 @@ export default function App() {
               <AdminRoute><Importacao /></AdminRoute>
             </ProtectedRoute>
           } />
+          <Route path="/importacao" element={
+            <ProtectedRoute>
+              <AdminRoute><Importacao /></AdminRoute>
+            </ProtectedRoute>
+          } />
+          <Route path="/carga" element={
+            <ProtectedRoute>
+              <AdminRoute><Importacao /></AdminRoute>
+            </ProtectedRoute>
+          } />
           <Route path="/auditoria" element={
             <ProtectedRoute>
               <AdminRoute><Auditoria /></AdminRoute>

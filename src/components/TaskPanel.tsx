@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Debito, Notificacao } from '../types';
-import { calculateFlow, parseDateSafely } from '../lib/flowEngine';
+import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
 import { 
   Clock, 
   Calendar, 
@@ -42,10 +42,13 @@ interface TaskItem {
   fase: string;
   acaoDesc: string;
   acaoTipo: 'notificar' | 'protesto' | 'comunicar' | 'incluir' | 'aguardar';
-  dataInicio: string | null;
-  prazoFinal: string | null;
-  diasRestantes: number;
-  atrasoDias: number;
+  dataInicioFormatada: string;
+  prazoFinalFormatada: string;
+  temDataReal: boolean;
+  prazo: 'EM PRAZO' | 'VENCIDO' | 'CONCLUÍDO';
+  dias: number;
+  situacao: string;
+  isCritico: boolean;
 }
 
 export default function TaskPanel({ 
@@ -61,56 +64,26 @@ export default function TaskPanel({
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [submitting, setSubmitting] = useState(false);
 
-  // Filter unpaid/pending debits using business flow
+  // Filter unpaid/pending debits using central business status logic
   const tasks = debitos.reduce<TaskItem[]>((acc, debito) => {
-    const isPago = ['pago', 'regularizado', 'concluido', 'concluído'].includes(
-      String(debito.statusGeral || '').toLowerCase()
-    );
+    const info = getStatusDebito(debito, notifications);
 
-    if (isPago) return acc;
-
-    const flow = calculateFlow(debito, notifications);
-
-    // Skip completed CADIN list as there are no further automatic flow operations
-    if (flow.faseAtual === 'CADIN') return acc;
-
-    // Determine target action descriptor & action type
-    let acaoDesc = '';
-    let acaoTipo: 'notificar' | 'protesto' | 'comunicar' | 'incluir' | 'aguardar' = 'notificar';
-
-    switch (flow.faseAtual) {
-      case 'Aguardando Notificação':
-        acaoDesc = 'Notificar Devedor';
-        acaoTipo = 'notificar';
-        break;
-      case 'Notificação':
-        acaoDesc = 'Enviar para Protesto';
-        acaoTipo = 'protesto';
-        break;
-      case 'Protesto':
-        acaoDesc = 'Comunicar Inscrição CADIN';
-        acaoTipo = 'comunicar';
-        break;
-      case 'Comunicação CADIN':
-        acaoDesc = 'Aguardando prazo de 75 dias';
-        acaoTipo = 'aguardar';
-        break;
-      case 'Aguardando inclusão CADIN':
-        acaoDesc = 'Incluir no CADIN';
-        acaoTipo = 'incluir';
-        break;
-    }
+    if (info.isPago || info.prazo === 'CONCLUÍDO') return acc;
+    if (info.fase === 'CADIN') return acc;
 
     acc.push({
       id: debito.id,
       debito,
-      fase: flow.faseAtual,
-      acaoDesc,
-      acaoTipo,
-      dataInicio: flow.dataInicioFase,
-      prazoFinal: flow.prazoFinal,
-      diasRestantes: flow.diasRestantes,
-      atrasoDias: flow.atrasoDias
+      fase: info.fase,
+      acaoDesc: info.acaoRecomendada,
+      acaoTipo: (info.acaoTipo === 'nenhuma' ? 'aguardar' : info.acaoTipo) as any,
+      dataInicioFormatada: info.dataInicioFormatada,
+      prazoFinalFormatada: info.prazoFinalFormatado,
+      temDataReal: info.temDataReal,
+      prazo: info.prazo,
+      dias: info.dias,
+      situacao: info.situacao,
+      isCritico: info.isCritico
     });
 
     return acc;
@@ -122,8 +95,8 @@ export default function TaskPanel({
     proximas: TaskItem[];
     emprazo: TaskItem[];
   }>((groups, task) => {
-    const isOverdue = task.atrasoDias > 0 || task.fase === 'Aguardando inclusão CADIN' || (task.fase === 'Aguardando Notificação' && task.atrasoDias > 0);
-    const isNear = !isOverdue && task.diasRestantes > 0 && task.diasRestantes <= 7;
+    const isOverdue = task.prazo === 'VENCIDO';
+    const isNear = !isOverdue && task.dias > 0 && task.dias <= 7;
 
     if (isOverdue) {
       groups.atrasadas.push(task);
@@ -407,11 +380,9 @@ export default function TaskPanel({
                         <p className="font-bold flex items-center gap-1 mt-0.5">
                           Fase atual: <span className="text-crb-navy font-black">{task.fase}</span>
                         </p>
-                        {task.prazoFinal && (
-                          <p className="font-bold flex items-center gap-1 mt-0.5">
-                            Estágio iniciado em: <span className="text-slate-600">{formatDate(task.dataInicio)}</span>
-                          </p>
-                        )}
+                        <p className="font-bold flex items-center gap-1 mt-0.5">
+                          Estágio iniciado em: <span className="text-slate-600 font-sans">{task.dataInicioFormatada}</span>
+                        </p>
                       </div>
                     </div>
 
@@ -427,13 +398,13 @@ export default function TaskPanel({
                       </div>
                       
                       <div className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                        {task.atrasoDias > 0 ? (
+                        {task.prazo === 'VENCIDO' ? (
                           <span className="text-red-600 font-black flex items-center gap-1 bg-red-50 border border-red-100 px-2 py-0.5 rounded">
-                            <ShieldAlert size={12} /> Atrasado há {task.atrasoDias} dia(s)
+                            <ShieldAlert size={12} /> {task.dias > 0 ? `Atrasado há ${task.dias} dia(s)` : 'Prazo regulamentar esgotado'}
                           </span>
-                        ) : task.diasRestantes > 0 ? (
+                        ) : task.dias > 0 && task.temDataReal ? (
                           <span className="text-slate-500 font-bold bg-slate-100 px-2 py-0.5 rounded">
-                            Prazo regulamentar: {task.diasRestantes} dia(s) restante(s)
+                            Prazo regulamentar: {task.dias} dia(s) restante(s)
                           </span>
                         ) : (
                           <span className="text-emerald-600 font-bold bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded">
