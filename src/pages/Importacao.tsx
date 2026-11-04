@@ -7,7 +7,6 @@ import {
   AlertCircle, 
   Play, 
   Square, 
-  FileDown,
   Database,
   Trash2,
   X,
@@ -16,17 +15,248 @@ import {
   RefreshCw,
   FileSpreadsheet,
   Layers,
-  Info
+  HelpCircle,
+  Filter
 } from 'lucide-react';
 import { db, logAuditoria } from '../lib/firebase';
-import { collection, doc, writeBatch, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, doc, writeBatch, getDocs } from 'firebase/firestore';
 import { useAuth } from '../lib/AuthContext';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-// Sanitizer for natural keys
+const MONTH_NAMES = [
+  'janeiro', 'fevereiro', 'marco', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'
+];
+
+// 4) Limpar valores de texto: remove aspas duplicadas repetidas ("""Ad Referendum""" vira Ad Referendum), trim e espaços duplos
+export const cleanText = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  let s = String(val).trim();
+  // Remove repetidas aspas externas
+  s = s.replace(/^["'“”«»\s]+|["'“”«»\s]+$/g, '');
+  // Converte aspas repetidas internas ("" vira " ou nada se envolve todo o texto)
+  s = s.replace(/""+/g, '"').replace(/''+/g, "'");
+  // Remove novamente se sobraram aspas externas
+  s = s.replace(/^["'“”«»\s]+|["'“”«»\s]+$/g, '');
+  // Colapsa espaços duplos
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+};
+
+// 5) Normaliza o número do documento: '037--2026' vira 037-2026; '007-202' deve ser erro com motivo 'Número inválido, ano incompleto'
+export const normalizeDocNumero = (val: any): { valid: boolean; numero: string; error?: string } => {
+  let s = cleanText(val);
+  if (!s) return { valid: false, numero: '', error: 'Número do documento obrigatório ausente' };
+
+  // Colapsa múltiplos traços ou barras consecutivas
+  s = s.replace(/-{2,}/g, '-');
+  s = s.replace(/\/{2,}/g, '/');
+
+  // Verifica ano incompleto no final (ex: '007-202' ou '007/202' ou ano com 3 dígitos)
+  if (/[\/\-](?:19\d|20\d)$/.test(s) || /[\/\-]\d{3}$/.test(s)) {
+    return { valid: false, numero: s, error: 'Número inválido, ano incompleto' };
+  }
+
+  // Verifica se termina em hífen ou barra solta (ex: '007-')
+  if (/[\/\-]$/.test(s)) {
+    return { valid: false, numero: s, error: 'Número inválido, formato incompleto' };
+  }
+
+  return { valid: true, numero: s };
+};
+
+// 1) Parser de datas único (parseDataFlex)
+export interface ParseDateResult {
+  valid: boolean;
+  iso: string;
+  display: string;
+  warning?: string;
+  error?: string;
+}
+
+export const parseDataFlex = (val: any): ParseDateResult => {
+  if (val === null || val === undefined || String(val).trim() === '') {
+    return { valid: true, iso: '', display: '' };
+  }
+
+  // Objeto Date nativo (ex: do XLSX com cellDates: true)
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) {
+      return { valid: false, iso: '', display: '', error: 'Data com valor inválido' };
+    }
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    const iso = new Date(Date.UTC(y, val.getMonth(), val.getDate(), 12, 0, 0)).toISOString();
+    return { valid: true, iso, display: `${d}/${m}/${y}` };
+  }
+
+  // Número serial do Excel
+  if (typeof val === 'number') {
+    if (val < 1 || isNaN(val)) {
+      return { valid: false, iso: '', display: String(val), error: 'Número serial de data inválido' };
+    }
+    const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+    if (!isNaN(date.getTime())) {
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      const iso = new Date(Date.UTC(y, date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)).toISOString();
+      return { valid: true, iso, display: `${d}/${m}/${y}` };
+    }
+    return { valid: false, iso: '', display: String(val), error: 'Número serial de data inválido' };
+  }
+
+  let s = String(val).trim();
+  if (!s) return { valid: true, iso: '', display: '' };
+
+  // Formato AAAA-MM-DD (ISO padrão)
+  const isoMatch = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = parseInt(isoMatch[2], 10);
+    const d = parseInt(isoMatch[3], 10);
+    if (y >= 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      const iso = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).toISOString();
+      return { valid: true, iso, display: `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y}` };
+    }
+  }
+
+  let wasCorrected = false;
+  const warnings: string[] = [];
+
+  // Remove caracteres estranhos do início e fim
+  let cleaned = s.replace(/^[^\d]+|[^\d]+$/g, '');
+
+  let rawParts = cleaned.split(/[\/\-]/);
+  if (rawParts.length !== 3) {
+    const dotParts = cleaned.split(/\./);
+    if (dotParts.length === 3) {
+      rawParts = dotParts;
+      wasCorrected = true;
+    } else {
+      return { valid: false, iso: '', display: s, error: 'Formato de data não reconhecido' };
+    }
+  }
+
+  let [p0, p1, p2] = rawParts.map(p => p.trim());
+
+  // Correção de pontos nos componentes (ex: '202.6' vira '2026')
+  if (p2.includes('.')) {
+    p2 = p2.replace(/\./g, '');
+    wasCorrected = true;
+  }
+  if (p0.includes('.')) {
+    p0 = p0.replace(/\./g, '');
+    wasCorrected = true;
+  }
+  if (p1.includes('.')) {
+    p1 = p1.replace(/\./g, '');
+    wasCorrected = true;
+  }
+
+  // Correção de ano digitado incorreto (ex: '0226' vira '2026')
+  if (/^02\d{2}$/.test(p2)) {
+    p2 = '20' + p2.slice(2);
+    wasCorrected = true;
+  } else if (/^\d{2}$/.test(p2)) {
+    p2 = '20' + p2;
+    wasCorrected = true;
+  }
+
+  // Correção de zeros/dígitos sobrando (ex: '014' vira '01' se dia for > 12)
+  if (p0.length > 2 && p0.startsWith('0')) {
+    p0 = p0.slice(0, 2);
+    wasCorrected = true;
+  }
+  if (p1.length > 2 && p1.startsWith('0')) {
+    p1 = p1.slice(0, 2);
+    wasCorrected = true;
+  }
+
+  const n0 = parseInt(p0, 10);
+  const n1 = parseInt(p1, 10);
+  const y = parseInt(p2, 10);
+
+  if (isNaN(n0) || isNaN(n1) || isNaN(y)) {
+    return { valid: false, iso: '', display: s, error: 'Componentes de data não numéricos' };
+  }
+
+  if (y < 1900 || y > 2099) {
+    return { valid: false, iso: '', display: s, error: `Ano inválido (${y})` };
+  }
+
+  let day: number;
+  let month: number;
+
+  // Regra:
+  // - se o primeiro número for maior que 12: é DD/MM
+  // - se o segundo for maior que 12: é M/D
+  // - se ambos forem 12 ou menos (ambíguo): use DD/MM, grave a linha e marque aviso 'Data ambígua assumida como DD/MM'
+  if (n0 > 12 && n1 <= 12) {
+    day = n0;
+    month = n1;
+  } else if (n1 > 12 && n0 <= 12) {
+    month = n0;
+    day = n1;
+  } else if (n0 <= 12 && n1 <= 12) {
+    day = n0;
+    month = n1;
+    warnings.push('Data ambígua assumida como DD/MM');
+  } else {
+    return { valid: false, iso: '', display: s, error: 'Dia e mês inválidos (ambos > 12)' };
+  }
+
+  if (day < 1 || day > 31 || month < 1 || month > 12) {
+    return { valid: false, iso: '', display: s, error: `Dia (${day}) ou mês (${month}) fora da faixa válida` };
+  }
+
+  if (wasCorrected) {
+    warnings.push('Data corrigida');
+  }
+
+  const iso = new Date(Date.UTC(y, month - 1, day, 12, 0, 0)).toISOString();
+  const display = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${y}`;
+
+  return {
+    valid: true,
+    iso,
+    display,
+    warning: warnings.length > 0 ? warnings.join(' | ') : undefined
+  };
+};
+
+// 3) Identificador de linha separadora de mês ou vazia
+export const isSeparatorOrEmptyRow = (rowObjOrArr: any): boolean => {
+  if (!rowObjOrArr) return true;
+  const values = Array.isArray(rowObjOrArr) ? rowObjOrArr : Object.values(rowObjOrArr);
+  const nonEmpty = values.filter(v => v !== undefined && v !== null && String(v).trim() !== '');
+  if (nonEmpty.length === 0) return true;
+
+  if (nonEmpty.length === 1) {
+    const text = String(nonEmpty[0])
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    // Nome de mês
+    if (MONTH_NAMES.some(m => text === m || text.includes(m))) {
+      return true;
+    }
+    // Cabeçalho de título ou data no topo antes do cabeçalho
+    if (text.startsWith('mes de') || text.startsWith('total') || text.startsWith('exercicio') || text.startsWith('relatorio') || text.startsWith('conselho')) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+// Sanitizador para chave natural
 const sanitizeKey = (v: string): string => {
   return String(v || '')
     .normalize("NFD")
@@ -37,7 +267,7 @@ const sanitizeKey = (v: string): string => {
     .toLowerCase();
 };
 
-// Brazilian currency parser
+// Parser de moedas brasileiras
 export const parseCurrencyBR = (val: any): { valid: boolean; value: number } => {
   if (val === null || val === undefined || val === '') return { valid: false, value: 0 };
   if (typeof val === 'number') {
@@ -47,11 +277,10 @@ export const parseCurrencyBR = (val: any): { valid: boolean; value: number } => 
   const str = String(val).trim();
   let cleaned = str.replace(/R\$/gi, '').replace(/\s/g, '');
   
-  // Format Brazilian (1.234,56 or 1234,56)
   if (/^-?\d{1,3}(\.\d{3})*,\d{1,2}$/.test(cleaned) || /^-?\d+,\d{1,2}$/.test(cleaned)) {
     cleaned = cleaned.replace(/\./g, '').replace(',', '.');
   } else if (/^-?\d+(\.\d+)?$/.test(cleaned)) {
-    // Already standard float format
+    // float padrão
   } else {
     cleaned = cleaned.replace(/\./g, '').replace(',', '.');
   }
@@ -63,68 +292,6 @@ export const parseCurrencyBR = (val: any): { valid: boolean; value: number } => 
   return { valid: true, value: num };
 };
 
-// Date parser supporting dd/mm/aaaa, yyyy-mm-dd, and Excel serial numbers
-export const parseDateBR = (val: any): { valid: boolean; iso: string; display: string } => {
-  if (val === null || val === undefined || val === '') {
-    return { valid: true, iso: '', display: '' };
-  }
-
-  // Excel serial number
-  if (typeof val === 'number') {
-    if (val < 1) return { valid: false, iso: '', display: '' };
-    const date = new Date((val - 25569) * 86400 * 1000);
-    if (!isNaN(date.getTime())) {
-      const iso = date.toISOString();
-      const d = String(date.getUTCDate()).padStart(2, '0');
-      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
-      const y = date.getUTCFullYear();
-      return { valid: true, iso, display: `${d}/${m}/${y}` };
-    }
-    return { valid: false, iso: '', display: '' };
-  }
-
-  const s = String(val).trim();
-  if (!s) return { valid: true, iso: '', display: '' };
-
-  // dd/mm/aaaa or dd-mm-aaaa
-  const ddmmyyyy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (ddmmyyyy) {
-    const day = parseInt(ddmmyyyy[1], 10);
-    const month = parseInt(ddmmyyyy[2], 10);
-    const year = parseInt(ddmmyyyy[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-      const d = String(day).padStart(2, '0');
-      const m = String(month).padStart(2, '0');
-      return { valid: true, iso: date.toISOString(), display: `${d}/${m}/${year}` };
-    }
-    return { valid: false, iso: '', display: s };
-  }
-
-  // yyyy-mm-dd
-  const yyyymmdd = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
-  if (yyyymmdd) {
-    const year = parseInt(yyyymmdd[1], 10);
-    const month = parseInt(yyyymmdd[2], 10);
-    const day = parseInt(yyyymmdd[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-      const d = String(day).padStart(2, '0');
-      const m = String(month).padStart(2, '0');
-      return { valid: true, iso: date.toISOString(), display: `${d}/${m}/${year}` };
-    }
-    return { valid: false, iso: '', display: s };
-  }
-
-  // Fallback try Date parse
-  const parsed = new Date(s);
-  if (!isNaN(parsed.getTime())) {
-    return { valid: true, iso: parsed.toISOString(), display: s };
-  }
-  return { valid: false, iso: '', display: s };
-};
-
-// Flexible column finder
 const normalizeKey = (key: string): string => {
   return String(key || '')
     .normalize("NFD")
@@ -153,6 +320,7 @@ interface ValidRowItem {
   data: any;
   rowIndex: number;
   previewData: Record<string, any>;
+  warnings: string[];
 }
 
 interface DuplicateRowItem {
@@ -172,6 +340,8 @@ interface ErrorRowItem {
 interface PreviewRowItem {
   rowIndex: number;
   status: 'NOVO' | 'ATUALIZAR' | 'DUPLICADO' | 'ERRO';
+  hasWarning: boolean;
+  warnings?: string[];
   key: string;
   identificador: string;
   detalhe1: string;
@@ -190,7 +360,7 @@ export default function Importacao() {
   const [fileName, setFileName] = useState('');
   const [generalError, setGeneralError] = useState<string | null>(null);
 
-  // Pre-validation and Analysis state
+  // Estados de análise e pré-visualização
   const [validRows, setValidRows] = useState<ValidRowItem[]>([]);
   const [duplicateRows, setDuplicateRows] = useState<DuplicateRowItem[]>([]);
   const [errorRows, setErrorRows] = useState<ErrorRowItem[]>([]);
@@ -200,25 +370,36 @@ export default function Importacao() {
     criadas: number;
     atualizadas: number;
     duplicadasNoArquivo: number;
+    comAviso: number;
     comErro: number;
-  }>({ totalLinhas: 0, criadas: 0, atualizadas: 0, duplicadasNoArquivo: 0, comErro: 0 });
+    ignoradasSeparadores: number;
+  }>({
+    totalLinhas: 0,
+    criadas: 0,
+    atualizadas: 0,
+    duplicadasNoArquivo: 0,
+    comAviso: 0,
+    comErro: 0,
+    ignoradasSeparadores: 0
+  });
 
-  // Import Execution state
+  // Execução da Importação
   const [stopRequested, setStopRequested] = useState(false);
   const [batchErrors, setBatchErrors] = useState<string[]>([]);
   const [finalSummary, setFinalSummary] = useState<{
     criados: number;
     atualizados: number;
     ignorados: number;
+    comAviso: number;
     comErro: number;
+    ignoradasSeparadores: number;
   } | null>(null);
 
-  // Wipe database modal state
+  // Modal de Limpeza de Base
   const [isClearModalOpen, setIsClearModalOpen] = useState(false);
   const [clearConfirmationText, setClearConfirmationText] = useState('');
   const [isCleaning, setIsCleaning] = useState(false);
 
-  // Reset state
   const handleCancel = () => {
     setStatus('idle');
     setFileName('');
@@ -226,7 +407,15 @@ export default function Importacao() {
     setDuplicateRows([]);
     setErrorRows([]);
     setPreviewRows([]);
-    setStats({ totalLinhas: 0, criadas: 0, atualizadas: 0, duplicadasNoArquivo: 0, comErro: 0 });
+    setStats({
+      totalLinhas: 0,
+      criadas: 0,
+      atualizadas: 0,
+      duplicadasNoArquivo: 0,
+      comAviso: 0,
+      comErro: 0,
+      ignoradasSeparadores: 0
+    });
     setGeneralError(null);
     setFinalSummary(null);
     setProgress(0);
@@ -235,7 +424,6 @@ export default function Importacao() {
     }
   };
 
-  // Helper to fetch existing document IDs for the target collection to determine create vs update
   const getExistingDocIds = async (colName: string): Promise<Set<string>> => {
     try {
       const snap = await getDocs(collection(db, colName));
@@ -243,13 +431,12 @@ export default function Importacao() {
       snap.forEach(d => set.add(d.id));
       return set;
     } catch (e) {
-      console.warn(`Aviso ao ler documentos existentes da coleção ${colName}:`, e);
+      console.warn(`Aviso ao ler documentos de ${colName}:`, e);
       return new Set<string>();
     }
   };
 
-  // Parse and validate rows before writing
-  const processAndValidateRows = async (rawRows: any[], targetType: 'BASE_FINANCEIRA' | 'OFICIOS' | 'PROCESSOS') => {
+  const processAndValidateRows = async (rawRows: any[], targetType: 'BASE_FINANCEIRA' | 'OFICIOS' | 'PROCESSOS', preIgnoredCount: number = 0) => {
     setStatus('analyzing');
     setGeneralError(null);
 
@@ -262,15 +449,19 @@ export default function Importacao() {
     const previewList: PreviewRowItem[] = [];
 
     const seenKeysInFile = new Set<string>();
+    let separadoresCount = preIgnoredCount;
 
     for (let i = 0; i < rawRows.length; i++) {
       const item = rawRows[i];
-      const rowIndex = i + 2; // Row 2 = first data row after header in a typical spreadsheet
+      const rowIndex = i + 2;
 
-      // Empty row guard
-      if (!item || Object.values(item).every(v => v === undefined || v === null || String(v).trim() === '')) {
+      // 3) Ignora sem contar como erro: vazias e separadores de mês
+      if (isSeparatorOrEmptyRow(item)) {
+        separadoresCount++;
         continue;
       }
+
+      const rowWarnings: string[] = [];
 
       if (targetType === 'BASE_FINANCEIRA') {
         const rawCrb = findValue(item, ['CRB', 'Nº do CRB', 'N do CRB', 'Inscrição', 'Registro', 'CRB Profissional']);
@@ -282,17 +473,16 @@ export default function Importacao() {
         const rawDataVenc = findValue(item, ['Data Vencimento', 'Vencimento', 'DataVencimento', 'Venc.']);
         const rawStatus = findValue(item, ['Status Geral', 'Status', 'Situação', 'Situacao']);
         
-        // Notifications/protests/cadin auxiliary dates if present in spreadsheet
         const rawDataNotif = findValue(item, ['Data Notificação', 'Data da Notificação', 'Notificação', 'Data Notificacao']);
         const rawDataProtesto = findValue(item, ['Data Protesto', 'Data do Protesto', 'Protesto', 'DataProtesto']);
         const rawDataComCadin = findValue(item, ['Data Comunicação CADIN', 'Data Comunicacao Cadin', 'Comunicação CADIN']);
         const rawDataCadin = findValue(item, ['Data CADIN', 'Inclusão CADIN', 'Data Inclusao Cadin', 'DataCadin']);
 
-        const crbClean = String(rawCrb || '').trim();
-        const nomeClean = String(rawNome || '').trim();
-        const origemClean = String(rawOrigem || 'Anuidade').trim();
+        const crbClean = cleanText(rawCrb);
+        const nomeClean = cleanText(rawNome);
+        const origemClean = cleanText(rawOrigem || 'Anuidade');
 
-        // 1. Validation: CRB is mandatory
+        // CRB obrigatório
         if (!crbClean) {
           const errItem: ErrorRowItem = {
             rowIndex,
@@ -305,8 +495,9 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
-              identificador: crbClean || 'Sem CRB',
+              identificador: 'Sem CRB',
               detalhe1: nomeClean || 'Sem Nome',
               detalhe2: 'Ex.: ---',
               detalhe3: 'R$ ---',
@@ -316,10 +507,10 @@ export default function Importacao() {
           continue;
         }
 
-        // 2. Validation: Exercício numérico entre 1990 e o ano atual (CURRENT_YEAR)
+        // Exercício numérico entre 1990 e CURRENT_YEAR
         let anoNum: number | null = null;
         if (rawAno !== undefined && rawAno !== null && String(rawAno).trim() !== '') {
-          const parsedAno = parseInt(String(rawAno).trim(), 10);
+          const parsedAno = parseInt(cleanText(rawAno), 10);
           if (!isNaN(parsedAno)) {
             anoNum = parsedAno;
           }
@@ -336,6 +527,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: crbClean,
               detalhe1: nomeClean || 'Sem Nome',
@@ -347,13 +539,13 @@ export default function Importacao() {
           continue;
         }
 
-        // 3. Validation: Valores monetários aceitando formato brasileiro (1.234,56 e R$)
+        // Valores monetários
         const parsedValor = parseCurrencyBR(rawValor);
         if (!parsedValor.valid || parsedValor.value < 0) {
           const errItem: ErrorRowItem = {
             rowIndex,
             key: `CRB: ${crbClean} (${anoNum})`,
-            reason: `Valor monetário original inválido: "${rawValor}". Aceita ex.: 1.234,56 ou R$ 1.234,56.`,
+            reason: `Valor monetário original inválido: "${rawValor}". Aceita formato brasileiro (ex: 1.234,56 ou R$ 1.234,56).`,
             raw: item
           };
           errors.push(errItem);
@@ -361,6 +553,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: crbClean,
               detalhe1: nomeClean || 'Sem Nome',
@@ -376,13 +569,13 @@ export default function Importacao() {
           ? parseCurrencyBR(rawValorCorrigido)
           : parsedValor;
 
-        // 4. Validation: Datas aceitando dd/mm/aaaa e serial do Excel
-        const parsedVenc = parseDateBR(rawDataVenc);
+        // Validação com parseDataFlex
+        const parsedVenc = parseDataFlex(rawDataVenc);
         if (!parsedVenc.valid) {
           const errItem: ErrorRowItem = {
             rowIndex,
             key: `CRB: ${crbClean} (${anoNum})`,
-            reason: `Data de vencimento inválida: "${rawDataVenc}". Aceita dd/mm/aaaa ou serial do Excel.`,
+            reason: `Data de vencimento inválida: "${rawDataVenc}". ${parsedVenc.error || ''}`,
             raw: item
           };
           errors.push(errItem);
@@ -390,6 +583,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: crbClean,
               detalhe1: nomeClean || 'Sem Nome',
@@ -401,20 +595,26 @@ export default function Importacao() {
           continue;
         }
 
-        // Optional auxiliary dates validation
-        const parsedNotif = parseDateBR(rawDataNotif);
-        const parsedProtesto = parseDateBR(rawDataProtesto);
-        const parsedComCadin = parseDateBR(rawDataComCadin);
-        const parsedCadin = parseDateBR(rawDataCadin);
+        if (parsedVenc.warning) {
+          rowWarnings.push(`Vencimento: ${parsedVenc.warning}`);
+        }
 
-        // Deduplication Natural Key: CRB + exercicio + origem (se nao existir origem use CRB + exercicio)
+        const parsedNotif = parseDataFlex(rawDataNotif);
+        if (parsedNotif.warning) rowWarnings.push(`Notificação: ${parsedNotif.warning}`);
+        const parsedProtesto = parseDataFlex(rawDataProtesto);
+        if (parsedProtesto.warning) rowWarnings.push(`Protesto: ${parsedProtesto.warning}`);
+        const parsedComCadin = parseDataFlex(rawDataComCadin);
+        if (parsedComCadin.warning) rowWarnings.push(`Comunicação CADIN: ${parsedComCadin.warning}`);
+        const parsedCadin = parseDataFlex(rawDataCadin);
+        if (parsedCadin.warning) rowWarnings.push(`CADIN: ${parsedCadin.warning}`);
+
+        // Chave Natural Débito: CRB + exercicio + origem
         const cleanCrbKey = sanitizeKey(crbClean);
         const origemSlug = rawOrigem ? sanitizeKey(origemClean).slice(0, 20) : '';
         const naturalKey = origemSlug 
           ? `deb_${cleanCrbKey}_${anoNum}_${origemSlug}` 
           : `deb_${cleanCrbKey}_${anoNum}`;
 
-        // Check deduplication within the file itself
         if (seenKeysInFile.has(naturalKey)) {
           const dupItem: DuplicateRowItem = {
             rowIndex,
@@ -427,6 +627,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'DUPLICADO',
+              hasWarning: false,
               key: naturalKey,
               identificador: crbClean,
               detalhe1: nomeClean || '---',
@@ -439,7 +640,6 @@ export default function Importacao() {
         }
 
         seenKeysInFile.add(naturalKey);
-
         const isUpdate = existingDocIds.has(naturalKey);
 
         const debitoData: any = {
@@ -452,7 +652,7 @@ export default function Importacao() {
           valor: parsedValor.value,
           valorOriginal: parsedValor.value,
           valorCorrigido: parsedValorCorrigido.valid ? parsedValorCorrigido.value : parsedValor.value,
-          statusGeral: String(rawStatus || 'Pendente').trim(),
+          statusGeral: cleanText(rawStatus) || 'Pendente',
           updatedAt: new Date().toISOString(),
           ...(parsedNotif.iso ? { notificacaoEnviada: true, dataNotificacao: parsedNotif.iso } : {}),
           ...(parsedProtesto.iso ? { protestoEnviado: true, dataProtesto: parsedProtesto.iso } : {}),
@@ -466,13 +666,16 @@ export default function Importacao() {
           isUpdate,
           data: debitoData,
           rowIndex,
-          previewData: debitoData
+          previewData: debitoData,
+          warnings: rowWarnings
         });
 
         if (previewList.length < 20) {
           previewList.push({
             rowIndex,
             status: isUpdate ? 'ATUALIZAR' : 'NOVO',
+            hasWarning: rowWarnings.length > 0,
+            warnings: rowWarnings,
             key: naturalKey,
             identificador: crbClean,
             detalhe1: nomeClean || 'Não Informado',
@@ -491,16 +694,15 @@ export default function Importacao() {
         const rawObs = findValue(item, ['obs', 'observacoes', 'observações', 'observacao']);
         const rawAno = findValue(item, ['ano', 'exercicio', 'exercício']);
 
-        const numeroClean = String(rawNumero || '').trim();
-        const assuntoClean = String(rawAssunto || '').trim();
-        const destinatarioClean = String(rawDestinatario || '').trim();
+        const normNumero = normalizeDocNumero(rawNumero);
+        const assuntoClean = cleanText(rawAssunto);
+        const destinatarioClean = cleanText(rawDestinatario);
 
-        // 1. Mandatory validation
-        if (!numeroClean) {
+        if (!normNumero.valid) {
           const errItem: ErrorRowItem = {
             rowIndex,
             key: `Linha ${rowIndex}`,
-            reason: 'Número do ofício obrigatório ausente.',
+            reason: normNumero.error || 'Número do ofício obrigatório ausente.',
             raw: item
           };
           errors.push(errItem);
@@ -508,8 +710,9 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
-              identificador: 'Sem Número',
+              identificador: cleanText(rawNumero) || 'Sem Número',
               detalhe1: assuntoClean || '---',
               detalhe2: destinatarioClean || '---',
               detalhe3: '---',
@@ -518,6 +721,8 @@ export default function Importacao() {
           }
           continue;
         }
+
+        const numeroClean = normNumero.numero;
 
         if (!assuntoClean) {
           const errItem: ErrorRowItem = {
@@ -531,6 +736,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: numeroClean,
               detalhe1: 'Sem Assunto',
@@ -554,6 +760,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: numeroClean,
               detalhe1: assuntoClean,
@@ -565,13 +772,12 @@ export default function Importacao() {
           continue;
         }
 
-        // Date parse
-        const parsedDate = parseDateBR(rawData);
+        const parsedDate = parseDataFlex(rawData);
         if (!parsedDate.valid) {
           const errItem: ErrorRowItem = {
             rowIndex,
             key: `Ofício: ${numeroClean}`,
-            reason: `Data inválida no ofício: "${rawData}".`,
+            reason: `Data inválida no ofício: "${rawData}". ${parsedDate.error || ''}`,
             raw: item
           };
           errors.push(errItem);
@@ -579,6 +785,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: numeroClean,
               detalhe1: assuntoClean,
@@ -590,10 +797,13 @@ export default function Importacao() {
           continue;
         }
 
-        // Natural Key for Ofícios: número do documento
+        if (parsedDate.warning) {
+          rowWarnings.push(`Data do ofício: ${parsedDate.warning}`);
+        }
+
+        // Chave Natural Ofício: número do documento
         const naturalKey = `ofi_${sanitizeKey(numeroClean)}`;
 
-        // Deduplication within file
         if (seenKeysInFile.has(naturalKey)) {
           const dupItem: DuplicateRowItem = {
             rowIndex,
@@ -606,6 +816,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'DUPLICADO',
+              hasWarning: false,
               key: naturalKey,
               identificador: numeroClean,
               detalhe1: assuntoClean,
@@ -618,7 +829,6 @@ export default function Importacao() {
         }
 
         seenKeysInFile.add(naturalKey);
-
         const isUpdate = existingDocIds.has(naturalKey);
         const dataFinal = parsedDate.iso || new Date().toISOString();
         const anoNum = rawAno ? parseInt(String(rawAno), 10) : new Date(dataFinal).getFullYear();
@@ -628,14 +838,14 @@ export default function Importacao() {
           numero: numeroClean,
           numeroOficio: numeroClean,
           assunto: assuntoClean,
-          tipo: String(rawTipo || 'Circular').trim(),
-          tipoOficio: String(rawTipo || 'Circular').trim(),
+          tipo: cleanText(rawTipo || 'Circular'),
+          tipoOficio: cleanText(rawTipo || 'Circular'),
           destinatario: destinatarioClean,
           data: dataFinal,
           dataEnvio: dataFinal,
           dataEmissao: dataFinal,
-          status: String(rawStatus || 'Enviado').trim(),
-          observacao: String(rawObs || '').trim(),
+          status: cleanText(rawStatus || 'Enviado'),
+          observacao: cleanText(rawObs),
           ano: isNaN(anoNum) ? CURRENT_YEAR : anoNum,
           updatedAt: new Date().toISOString()
         };
@@ -646,13 +856,16 @@ export default function Importacao() {
           isUpdate,
           data: oficioData,
           rowIndex,
-          previewData: oficioData
+          previewData: oficioData,
+          warnings: rowWarnings
         });
 
         if (previewList.length < 20) {
           previewList.push({
             rowIndex,
             status: isUpdate ? 'ATUALIZAR' : 'NOVO',
+            hasWarning: rowWarnings.length > 0,
+            warnings: rowWarnings,
             key: naturalKey,
             identificador: numeroClean,
             detalhe1: assuntoClean,
@@ -671,16 +884,15 @@ export default function Importacao() {
         const rawObs = findValue(item, ['obs', 'observacoes', 'observações', 'observacao']);
         const rawAno = findValue(item, ['ano', 'exercicio', 'exercício']);
 
-        const numeroClean = String(rawNumero || '').replace(/["']/g, '').trim();
-        const profissionalClean = String(rawProfissional || '').replace(/["']/g, '').trim();
-        const solicitacaoClean = String(rawSolicitacao || '').replace(/["']/g, '').trim();
+        const normNumero = normalizeDocNumero(rawNumero);
+        const profissionalClean = cleanText(rawProfissional);
+        const solicitacaoClean = cleanText(rawSolicitacao);
 
-        // 1. Mandatory fields
-        if (!numeroClean) {
+        if (!normNumero.valid) {
           const errItem: ErrorRowItem = {
             rowIndex,
             key: `Linha ${rowIndex}`,
-            reason: 'Número do processo obrigatório ausente.',
+            reason: normNumero.error || 'Número do processo obrigatório ausente.',
             raw: item
           };
           errors.push(errItem);
@@ -688,8 +900,9 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
-              identificador: 'Sem Processo',
+              identificador: cleanText(rawNumero) || 'Sem Processo',
               detalhe1: profissionalClean || '---',
               detalhe2: solicitacaoClean || '---',
               detalhe3: '---',
@@ -699,6 +912,9 @@ export default function Importacao() {
           continue;
         }
 
+        const numeroClean = normNumero.numero;
+
+        // 6) Linha só com número e solicitação e sem profissional continua erro
         if (!profissionalClean) {
           const errItem: ErrorRowItem = {
             rowIndex,
@@ -711,6 +927,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: numeroClean,
               detalhe1: 'Sem Interessado',
@@ -734,6 +951,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: numeroClean,
               detalhe1: profissionalClean,
@@ -745,12 +963,12 @@ export default function Importacao() {
           continue;
         }
 
-        const parsedDateSol = parseDateBR(rawDataSolicitacao);
+        const parsedDateSol = parseDataFlex(rawDataSolicitacao);
         if (!parsedDateSol.valid) {
           const errItem: ErrorRowItem = {
             rowIndex,
             key: `Processo: ${numeroClean}`,
-            reason: `Data de solicitação inválida: "${rawDataSolicitacao}".`,
+            reason: `Data de solicitação inválida: "${rawDataSolicitacao}". ${parsedDateSol.error || ''}`,
             raw: item
           };
           errors.push(errItem);
@@ -758,6 +976,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'ERRO',
+              hasWarning: false,
               key: `Linha ${rowIndex}`,
               identificador: numeroClean,
               detalhe1: profissionalClean,
@@ -769,12 +988,30 @@ export default function Importacao() {
           continue;
         }
 
-        const parsedDatePlenaria = parseDateBR(rawDataPlenaria);
+        if (parsedDateSol.warning) {
+          rowWarnings.push(`Data da solicitação: ${parsedDateSol.warning}`);
+        }
 
-        // Natural key for Processos: número do processo
+        // 6) DATA DA PLENÁRIA: se não for data (ex: Analisar Vera, Conselheiro), grava esse texto no campo responsavel/observacao da plenaria e nao como erro
+        let plenariaIso: string | null = null;
+        let plenariaTextoObservacao: string | null = null;
+
+        if (rawDataPlenaria !== undefined && rawDataPlenaria !== null && String(rawDataPlenaria).trim() !== '') {
+          const parsedPlenaria = parseDataFlex(rawDataPlenaria);
+          if (parsedPlenaria.valid && parsedPlenaria.iso) {
+            plenariaIso = parsedPlenaria.iso;
+            if (parsedPlenaria.warning) {
+              rowWarnings.push(`Data plenária: ${parsedPlenaria.warning}`);
+            }
+          } else {
+            plenariaTextoObservacao = cleanText(rawDataPlenaria);
+            rowWarnings.push(`Texto na plenária ("${plenariaTextoObservacao}") registrado como observação`);
+          }
+        }
+
+        // Chave Natural Processo: número do processo
         const naturalKey = `prc_${sanitizeKey(numeroClean)}`;
 
-        // Deduplication within file
         if (seenKeysInFile.has(naturalKey)) {
           const dupItem: DuplicateRowItem = {
             rowIndex,
@@ -787,6 +1024,7 @@ export default function Importacao() {
             previewList.push({
               rowIndex,
               status: 'DUPLICADO',
+              hasWarning: false,
               key: naturalKey,
               identificador: numeroClean,
               detalhe1: profissionalClean,
@@ -799,10 +1037,10 @@ export default function Importacao() {
         }
 
         seenKeysInFile.add(naturalKey);
-
         const isUpdate = existingDocIds.has(naturalKey);
         const dataSolFinal = parsedDateSol.iso || new Date().toISOString();
         const anoNum = rawAno ? parseInt(String(rawAno), 10) : new Date(dataSolFinal).getFullYear();
+        const obsClean = cleanText(rawObs);
 
         const processoData: any = {
           id: naturalKey,
@@ -814,9 +1052,13 @@ export default function Importacao() {
           descricao: solicitacaoClean,
           dataSolicitacao: dataSolFinal,
           dataAbertura: dataSolFinal,
-          dataPlenaria: parsedDatePlenaria.iso || null,
-          status: String(rawStatus || 'Em Análise').trim(),
-          observacao: String(rawObs || '').trim(),
+          dataPlenaria: plenariaIso,
+          observacaoPlenaria: plenariaTextoObservacao,
+          responsavelPlenaria: plenariaTextoObservacao,
+          status: cleanText(rawStatus) || 'Em Análise',
+          observacao: plenariaTextoObservacao 
+            ? (obsClean ? `${obsClean} | Plenária: ${plenariaTextoObservacao}` : `Plenária: ${plenariaTextoObservacao}`)
+            : obsClean,
           ano: isNaN(anoNum) ? CURRENT_YEAR : anoNum,
           updatedAt: new Date().toISOString()
         };
@@ -827,13 +1069,16 @@ export default function Importacao() {
           isUpdate,
           data: processoData,
           rowIndex,
-          previewData: processoData
+          previewData: processoData,
+          warnings: rowWarnings
         });
 
         if (previewList.length < 20) {
           previewList.push({
             rowIndex,
             status: isUpdate ? 'ATUALIZAR' : 'NOVO',
+            hasWarning: rowWarnings.length > 0,
+            warnings: rowWarnings,
             key: naturalKey,
             identificador: numeroClean,
             detalhe1: profissionalClean,
@@ -846,6 +1091,7 @@ export default function Importacao() {
 
     const criadasCount = valids.filter(v => !v.isUpdate).length;
     const atualizadasCount = valids.filter(v => v.isUpdate).length;
+    const comAvisoCount = valids.filter(v => v.warnings.length > 0).length;
 
     setValidRows(valids);
     setDuplicateRows(duplicates);
@@ -853,17 +1099,18 @@ export default function Importacao() {
     setPreviewRows(previewList);
 
     setStats({
-      totalLinhas: rawRows.length,
+      totalLinhas: rawRows.length + preIgnoredCount,
       criadas: criadasCount,
       atualizadas: atualizadasCount,
       duplicadasNoArquivo: duplicates.length,
-      comErro: errors.length
+      comAviso: comAvisoCount,
+      comErro: errors.length,
+      ignoradasSeparadores: separadoresCount
     });
 
     setStatus('preview');
   };
 
-  // Find header row in matrix of sheet rows
   const findHeaderRowIndex = (rows: any[][]): number => {
     for (let i = 0; i < Math.min(rows.length, 15); i++) {
       const row = rows[i];
@@ -884,16 +1131,17 @@ export default function Importacao() {
         if (hasCrb && hasValor) return i;
       }
     }
-    return 0; // Default to first row
+    return 0;
   };
 
-  const convertMatrixToObjects = (rows: any[][], headerIndex: number): any[] => {
+  const convertMatrixToObjects = (rows: any[][], headerIndex: number): { dataObjects: any[]; preIgnoredCount: number } => {
     const headers = rows[headerIndex].map(h => String(h || '').trim());
     const dataObjects: any[] = [];
+    const preIgnoredCount = headerIndex; // linhas de título ou data no topo antes do cabeçalho
     
     for (let j = headerIndex + 1; j < rows.length; j++) {
       const row = rows[j];
-      if (!row || row.every(cell => cell === undefined || cell === null || String(cell).trim() === '')) {
+      if (isSeparatorOrEmptyRow(row)) {
         continue;
       }
       const obj: any = {};
@@ -904,10 +1152,9 @@ export default function Importacao() {
       });
       dataObjects.push(obj);
     }
-    return dataObjects;
+    return { dataObjects, preIgnoredCount };
   };
 
-  // File selection handler
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -930,8 +1177,8 @@ export default function Importacao() {
             return;
           }
           const headerIdx = findHeaderRowIndex(matrix);
-          const objects = convertMatrixToObjects(matrix, headerIdx);
-          processAndValidateRows(objects, importType);
+          const { dataObjects, preIgnoredCount } = convertMatrixToObjects(matrix, headerIdx);
+          processAndValidateRows(dataObjects, importType, preIgnoredCount);
         },
         error: (err) => {
           setGeneralError(`Erro ao ler arquivo CSV: ${err.message}`);
@@ -942,17 +1189,18 @@ export default function Importacao() {
       reader.onload = (evt) => {
         try {
           const bstr = evt.target?.result;
-          const wb = XLSX.read(bstr, { type: 'binary' });
+          // 2) Leia arquivos .xlsx com cellDates:true para usar o valor real da data e evite ambiguidade
+          const wb = XLSX.read(bstr, { type: 'binary', cellDates: true });
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
-          const matrix = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
+          const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' }) as any[][];
           if (!matrix || matrix.length === 0) {
             setGeneralError('A planilha Excel está vazia.');
             return;
           }
           const headerIdx = findHeaderRowIndex(matrix);
-          const objects = convertMatrixToObjects(matrix, headerIdx);
-          processAndValidateRows(objects, importType);
+          const { dataObjects, preIgnoredCount } = convertMatrixToObjects(matrix, headerIdx);
+          processAndValidateRows(dataObjects, importType, preIgnoredCount);
         } catch (err: any) {
           setGeneralError(`Erro ao processar planilha Excel: ${err.message || err}`);
         }
@@ -963,7 +1211,7 @@ export default function Importacao() {
     }
   };
 
-  // Confirm import and write in batches of up to 400 operations
+  // 400 operações por lote no writeBatch
   const handleConfirmImport = async () => {
     if (validRows.length === 0) {
       setGeneralError('Não há registros válidos para importar.');
@@ -975,7 +1223,7 @@ export default function Importacao() {
     setStopRequested(false);
     setBatchErrors([]);
 
-    const BATCH_SIZE = 400; // Requirement: até 400 operações por lote
+    const BATCH_SIZE = 400;
     const collectionName = importType === 'BASE_FINANCEIRA' ? 'debits' : importType === 'OFICIOS' ? 'oficios' : 'processos';
 
     let committedCount = 0;
@@ -1009,14 +1257,12 @@ export default function Importacao() {
       } catch (batchErr: any) {
         console.error(`Falha no lote ${Math.floor(i / BATCH_SIZE) + 1}:`, batchErr);
         failures.push(`Falha no lote ${Math.floor(i / BATCH_SIZE) + 1} (${chunk.length} registros): ${batchErr.message || batchErr}`);
-        // Continues processing remaining batches without aborting the loop
       }
 
       const currentProgress = Math.min(100, Math.round(((i + chunk.length) / totalToImport) * 100));
       setProgress(currentProgress);
     }
 
-    // Audit log
     await logAuditoria('IMPORTACAO', collectionName.toUpperCase(), 'Múltiplos', {
       totalArquivo: stats.totalLinhas,
       validos: validRows.length,
@@ -1024,6 +1270,8 @@ export default function Importacao() {
       gravadosAtualizados: committedUpdated,
       errosValidacao: errorRows.length,
       duplicadosArquivo: duplicateRows.length,
+      comAviso: stats.comAviso,
+      ignoradasSeparadores: stats.ignoradasSeparadores,
       falhasLotes: failures.length
     });
 
@@ -1032,13 +1280,15 @@ export default function Importacao() {
       criados: committedCreated,
       atualizados: committedUpdated,
       ignorados: duplicateRows.length,
-      comErro: errorRows.length + (validRows.length - committedCount)
+      comAviso: stats.comAviso,
+      comErro: errorRows.length + (validRows.length - committedCount),
+      ignoradasSeparadores: stats.ignoradasSeparadores
     });
 
     setStatus('finished');
   };
 
-  // Download Error & Duplication Report in CSV
+  // 7) Download de inconsistências e avisos em CSV
   const handleDownloadErrorReport = () => {
     const reportRows: Array<{
       Linha: number | string;
@@ -1048,7 +1298,7 @@ export default function Importacao() {
       Detalhes: string;
     }> = [];
 
-    // Validation errors
+    // Erros
     errorRows.forEach(err => {
       reportRows.push({
         Linha: err.rowIndex,
@@ -1059,7 +1309,7 @@ export default function Importacao() {
       });
     });
 
-    // File duplicates
+    // Duplicados no arquivo
     duplicateRows.forEach(dup => {
       reportRows.push({
         Linha: dup.rowIndex,
@@ -1070,7 +1320,18 @@ export default function Importacao() {
       });
     });
 
-    // Batch commit errors if any
+    // Linhas com Avisos
+    validRows.filter(v => v.warnings.length > 0).forEach(w => {
+      reportRows.push({
+        Linha: w.rowIndex,
+        Identificador: w.naturalKey,
+        Tipo: 'AVISO',
+        Motivo: w.warnings.join(' | '),
+        Detalhes: 'Linha validada e importada com aviso'
+      });
+    });
+
+    // Falhas de lote se houver
     batchErrors.forEach((bErr, idx) => {
       reportRows.push({
         Linha: 'Lote',
@@ -1082,24 +1343,23 @@ export default function Importacao() {
     });
 
     if (reportRows.length === 0) {
-      alert('Nenhum erro ou duplicidade identificado para este arquivo.');
+      alert('Nenhum erro ou aviso registrado para este arquivo.');
       return;
     }
 
-    // CSV with BOM for Brazilian Excel compatibility
     const csvContent = Papa.unparse(reportRows, { delimiter: ';' });
     const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `relatorio_erros_importacao_${importType.toLowerCase()}.csv`);
+    link.setAttribute('download', `relatorio_inconsistencias_e_avisos_${importType.toLowerCase()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  // Safe Admin-only Database Cleanup
+  // Limpeza de Base pelo perfil ADMIN exigindo digitar LIMPAR
   const handleConfirmClearDatabase = async () => {
     if (clearConfirmationText.trim() !== 'LIMPAR') {
       return;
@@ -1139,18 +1399,18 @@ export default function Importacao() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 pb-12">
-      {/* Header Bar */}
+    <div className="max-w-7xl mx-auto space-y-8 pb-12">
+      {/* Barra de Título */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm gap-6 border-l-8 border-crb-blue">
         <div>
           <div className="flex items-center gap-3">
             <h2 className="text-2xl md:text-3xl font-serif font-bold text-crb-navy">Carga de Dados</h2>
             <span className="text-xs bg-slate-100 text-slate-600 px-3 py-1 rounded-full font-bold">
-              Etapa 4 - Deduplicação & Validação
+              Etapa 4 - Deduplicação, Tratamento de Datas & Linhas
             </span>
           </div>
           <p className="text-sm text-slate-500 font-medium mt-1">
-            Importação segura com validação linha a linha, upsert por chave natural e relatório de erros.
+            Validação inteligente de datas, normalização de textos/documentos, descarte de separadores e upsert resiliente.
           </p>
         </div>
 
@@ -1172,7 +1432,6 @@ export default function Importacao() {
             </select>
           </div>
 
-          {/* Admin-only Wipe Base button */}
           {isAdmin && (
             <button 
               onClick={() => {
@@ -1188,7 +1447,6 @@ export default function Importacao() {
             </button>
           )}
 
-          {/* Choose File Button */}
           <label className={cn(
             "flex items-center justify-center gap-2 bg-crb-navy text-white px-6 py-2.5 rounded-2xl hover:bg-crb-navy-dark transition-all cursor-pointer font-bold shadow-md shadow-crb-navy/20 text-xs mt-5 group",
             (status === 'importing' || status === 'analyzing') && "pointer-events-none opacity-50"
@@ -1207,7 +1465,6 @@ export default function Importacao() {
         </div>
       </div>
 
-      {/* General Error Banner */}
       {generalError && (
         <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="bg-red-50 border border-red-200 p-6 rounded-2xl flex items-start gap-4">
           <AlertCircle size={22} className="text-red-600 shrink-0 mt-0.5" />
@@ -1221,21 +1478,19 @@ export default function Importacao() {
         </motion.div>
       )}
 
-      {/* Analyzing Spinner */}
       {status === 'analyzing' && (
         <div className="bg-white p-12 rounded-3xl border border-slate-200 shadow-sm text-center space-y-4">
           <RefreshCw size={36} className="animate-spin text-crb-blue mx-auto" />
-          <h3 className="text-lg font-bold text-crb-navy">Validando e deduplicando registros...</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Verificando regras de campos obrigatórios, faixas de exercício, formatação de moeda e comparando com registros já existentes na base.
+          <h3 className="text-lg font-bold text-crb-navy">Validando, normalizando e deduplicando registros...</h3>
+          <p className="text-xs text-slate-500 max-w-lg mx-auto">
+            Aplicando parser flexível de datas (DD/MM, M/D, correção de digitação), limpando aspas duplicadas, normalizando números de ofício/processo e filtrando separadores.
           </p>
         </div>
       )}
 
-      {/* STEP 1 PREVIEW: Pre-visualização detalhada ANTES de gravar */}
+      {/* PRÉ-VISUALIZAÇÃO */}
       {status === 'preview' && (
         <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-          {/* File Header Card */}
           <div className="bg-slate-900 text-white p-6 md:p-8 rounded-3xl shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden">
             <div className="flex items-center gap-4 relative z-10">
               <div className="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center text-crb-blue border border-white/10 shrink-0">
@@ -1249,12 +1504,11 @@ export default function Importacao() {
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 mt-1">
-                  Validação prévia concluída. Revise o diagnóstico antes de confirmar a gravação.
+                  Validação prévia concluída. Revise os contadores e a amostra de linhas antes de confirmar a gravação.
                 </p>
               </div>
             </div>
 
-            {/* Actions: Confirmar e Cancelar */}
             <div className="flex items-center gap-3 w-full md:w-auto relative z-10">
               <button 
                 onClick={handleCancel}
@@ -1273,46 +1527,58 @@ export default function Importacao() {
             </div>
           </div>
 
-          {/* KPI Stats Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Total no Arquivo</span>
+          {/* Cards de Contadores e Diagnóstico */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Total Linhas</span>
               <span className="text-2xl font-serif font-bold text-slate-800">{stats.totalLinhas}</span>
-              <p className="text-[11px] text-slate-400 mt-1">Linhas processadas</p>
+              <p className="text-[10px] text-slate-400 mt-1">No arquivo original</p>
             </div>
 
-            <div className="bg-emerald-50/70 p-5 rounded-2xl border border-emerald-200 shadow-sm">
+            <div className="bg-emerald-50/70 p-4 rounded-2xl border border-emerald-200 shadow-sm">
               <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest block mb-1">Serão Criados</span>
               <span className="text-2xl font-serif font-bold text-emerald-800">{stats.criadas}</span>
-              <p className="text-[11px] text-emerald-600 mt-1">Novos registros</p>
+              <p className="text-[10px] text-emerald-600 mt-1">Novos registros</p>
             </div>
 
-            <div className="bg-blue-50/70 p-5 rounded-2xl border border-blue-200 shadow-sm">
+            <div className="bg-blue-50/70 p-4 rounded-2xl border border-blue-200 shadow-sm">
               <span className="text-[10px] font-bold text-blue-700 uppercase tracking-widest block mb-1">Serão Atualizados</span>
               <span className="text-2xl font-serif font-bold text-blue-800">{stats.atualizadas}</span>
-              <p className="text-[11px] text-blue-600 mt-1">Mesclados por chave natural</p>
+              <p className="text-[10px] text-blue-600 mt-1">Mesclados por chave</p>
             </div>
 
-            <div className="bg-amber-50/70 p-5 rounded-2xl border border-amber-200 shadow-sm">
-              <span className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Duplicadas no Arquivo</span>
-              <span className="text-2xl font-serif font-bold text-amber-800">{stats.duplicadasNoArquivo}</span>
-              <p className="text-[11px] text-amber-600 mt-1">Ignoradas (mesma chave)</p>
+            <div className="bg-purple-50/70 p-4 rounded-2xl border border-purple-200 shadow-sm">
+              <span className="text-[10px] font-bold text-purple-700 uppercase tracking-widest block mb-1">Duplicadas Arq.</span>
+              <span className="text-2xl font-serif font-bold text-purple-800">{stats.duplicadasNoArquivo}</span>
+              <p className="text-[10px] text-purple-600 mt-1">Mesma chave no arq.</p>
             </div>
 
-            <div className="bg-red-50/70 p-5 rounded-2xl border border-red-200 shadow-sm">
-              <span className="text-[10px] font-bold text-red-700 uppercase tracking-widest block mb-1">Linhas com Erro</span>
+            <div className="bg-amber-50/80 p-4 rounded-2xl border border-amber-300 shadow-sm">
+              <span className="text-[10px] font-bold text-amber-800 uppercase tracking-widest block mb-1">Com Aviso</span>
+              <span className="text-2xl font-serif font-bold text-amber-900">{stats.comAviso}</span>
+              <p className="text-[10px] text-amber-700 mt-1">Data ambígua / corrigida</p>
+            </div>
+
+            <div className="bg-red-50/70 p-4 rounded-2xl border border-red-200 shadow-sm">
+              <span className="text-[10px] font-bold text-red-700 uppercase tracking-widest block mb-1">Com Erro</span>
               <span className="text-2xl font-serif font-bold text-red-800">{stats.comErro}</span>
-              <p className="text-[11px] text-red-600 mt-1">Não serão gravadas</p>
+              <p className="text-[10px] text-red-600 mt-1">Não gravadas</p>
+            </div>
+
+            <div className="bg-slate-100/70 p-4 rounded-2xl border border-slate-300 shadow-sm">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Ignoradas</span>
+              <span className="text-2xl font-serif font-bold text-slate-700">{stats.ignoradasSeparadores}</span>
+              <p className="text-[10px] text-slate-500 mt-1">Separadores / vazias</p>
             </div>
           </div>
 
-          {/* Quick Error Download if errors exist */}
-          {(stats.comErro > 0 || stats.duplicadasNoArquivo > 0) && (
+          {/* Banner de download do relatório caso haja erros, avisos ou duplicidades */}
+          {(stats.comErro > 0 || stats.comAviso > 0 || stats.duplicadasNoArquivo > 0) && (
             <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <AlertTriangle size={20} className="text-amber-600 shrink-0" />
                 <p className="text-xs text-amber-900 font-medium">
-                  Foram encontradas <strong>{stats.comErro} linhas com erro</strong> e <strong>{stats.duplicadasNoArquivo} duplicadas no arquivo</strong>. Elas não serão inseridas para preservar a integridade da base.
+                  Diagnóstico da planilha: <strong>{stats.comAviso} registros com aviso</strong> (ex: datas ambíguas assumidas como DD/MM ou datas corrigidas), <strong>{stats.comErro} com erro</strong> e <strong>{stats.duplicadasNoArquivo} duplicadas no arquivo</strong>.
                 </p>
               </div>
               <button 
@@ -1320,24 +1586,24 @@ export default function Importacao() {
                 className="flex items-center gap-2 bg-amber-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-amber-700 transition-all cursor-pointer shrink-0"
               >
                 <Download size={14} />
-                Baixar Relatório de Inconsistências (CSV)
+                Baixar Relatório de Inconsistências e Avisos (CSV)
               </button>
             </div>
           )}
 
-          {/* Sample Table: Primeiras 20 Linhas */}
+          {/* Tabela de Amostra das primeiras 20 linhas */}
           <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row items-start md:items-center justify-between gap-2">
               <div>
                 <span className="text-xs font-bold text-crb-navy uppercase tracking-widest">
-                  Amostra das Primeiras 20 Linhas com Status
+                  Amostra das Primeiras 20 Linhas com Diagnóstico e Avisos
                 </span>
                 <p className="text-[11px] text-slate-500">
-                  Mostrando diagnóstico de validação e motivo individual em caso de inconsistência.
+                  Badges indicam status de inserção e eventuais alertas em amarelo.
                 </p>
               </div>
               <span className="text-xs font-mono font-bold text-slate-400">
-                Exibindo {Math.min(previewRows.length, 20)} de {stats.totalLinhas} linhas
+                Exibindo {Math.min(previewRows.length, 20)} linhas
               </span>
             </div>
 
@@ -1359,7 +1625,7 @@ export default function Importacao() {
                     <th className="px-4 py-3">
                       {importType === 'BASE_FINANCEIRA' ? 'Valor' : 'Data'}
                     </th>
-                    <th className="px-4 py-3">Motivo / Detalhes</th>
+                    <th className="px-4 py-3">Motivo / Avisos / Detalhes</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1369,33 +1635,43 @@ export default function Importacao() {
                       className={cn(
                         "hover:bg-slate-50 transition-colors",
                         row.status === 'ERRO' && "bg-red-50/40",
-                        row.status === 'DUPLICADO' && "bg-amber-50/40"
+                        row.status === 'DUPLICADO' && "bg-purple-50/30",
+                        row.hasWarning && row.status !== 'ERRO' && "bg-amber-50/30"
                       )}
                     >
                       <td className="px-4 py-3 text-center font-mono font-bold text-slate-400">
                         #{row.rowIndex}
                       </td>
                       <td className="px-4 py-3">
-                        {row.status === 'NOVO' && (
-                          <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
-                            <CheckCircle2 size={12} /> Novo
-                          </span>
-                        )}
-                        {row.status === 'ATUALIZAR' && (
-                          <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
-                            <RefreshCw size={12} /> Atualizar
-                          </span>
-                        )}
-                        {row.status === 'DUPLICADO' && (
-                          <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
-                            <Layers size={12} /> Duplicado
-                          </span>
-                        )}
-                        {row.status === 'ERRO' && (
-                          <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
-                            <AlertCircle size={12} /> Inválido
-                          </span>
-                        )}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {row.status === 'NOVO' && (
+                            <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              <CheckCircle2 size={11} /> Novo
+                            </span>
+                          )}
+                          {row.status === 'ATUALIZAR' && (
+                            <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              <RefreshCw size={11} /> Atualizar
+                            </span>
+                          )}
+                          {row.status === 'DUPLICADO' && (
+                            <span className="inline-flex items-center gap-1 bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              <Layers size={11} /> Duplicado
+                            </span>
+                          )}
+                          {row.status === 'ERRO' && (
+                            <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 px-2 py-0.5 rounded-full font-bold text-[10px]">
+                              <AlertCircle size={11} /> Inválido
+                            </span>
+                          )}
+
+                          {/* 7) Badge amarelo de Aviso */}
+                          {row.hasWarning && (
+                            <span className="inline-flex items-center gap-1 bg-amber-200/80 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-full font-bold text-[10px]" title={row.warnings?.join(' | ')}>
+                              <AlertTriangle size={11} /> Aviso
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 font-bold text-crb-navy">
                         {row.identificador}
@@ -1414,9 +1690,17 @@ export default function Importacao() {
                           <span className="text-red-700 font-medium text-[11px] block max-w-xs">
                             {row.motivoErro}
                           </span>
+                        ) : row.hasWarning && row.warnings && row.warnings.length > 0 ? (
+                          <div className="space-y-0.5">
+                            {row.warnings.map((w, wi) => (
+                              <span key={wi} className="text-amber-800 font-medium text-[11px] block">
+                                ⚠ {w}
+                              </span>
+                            ))}
+                          </div>
                         ) : (
-                          <span className="text-slate-400 text-[11px] font-mono">
-                            Chave: {row.key}
+                          <span className="text-slate-400 text-[11px] font-mono truncate block max-w-xs">
+                            {row.key}
                           </span>
                         )}
                       </td>
@@ -1429,7 +1713,7 @@ export default function Importacao() {
         </motion.div>
       )}
 
-      {/* STEP 2 IMPORTING: Progresso em Tempo Real (Lotes de até 400 itens) */}
+      {/* IMPORTANDO (Lotes de 400) */}
       {status === 'importing' && (
         <div className="bg-white p-12 md:p-16 rounded-3xl border border-slate-200 shadow-xl text-center space-y-8">
           <div className="w-20 h-20 bg-crb-navy/5 text-crb-navy rounded-3xl flex items-center justify-center mx-auto shadow-inner border border-slate-100 animate-pulse">
@@ -1439,7 +1723,7 @@ export default function Importacao() {
           <div className="space-y-2">
             <h3 className="text-2xl font-serif font-bold text-crb-navy">Gravando Dados em Lotes de até 400</h3>
             <p className="text-slate-500 text-xs md:text-sm max-w-lg mx-auto">
-              Operações writeBatch ativas. Em caso de inconsistência em um lote, os lotes subsequentes continuam normalmente.
+              Operações writeBatch ativas. Em caso de falha em um lote individual, os subsequentes prosseguem normalmente.
             </p>
           </div>
 
@@ -1453,7 +1737,7 @@ export default function Importacao() {
             </div>
             <div className="flex justify-between items-center text-xs font-bold text-slate-600">
               <span>{Math.round(progress)}% Concluído</span>
-              <span>Até {validRows.length} registros</span>
+              <span>{validRows.length} registros no fluxo</span>
             </div>
           </div>
 
@@ -1467,7 +1751,7 @@ export default function Importacao() {
         </div>
       )}
 
-      {/* STEP 3 FINISHED: Resumo final e download do relatório de erros */}
+      {/* RESULTADO FINAL */}
       {status === 'finished' && finalSummary && (
         <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white p-8 md:p-12 rounded-3xl border border-slate-200 shadow-xl text-center space-y-8 border-t-8 border-emerald-500">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-md shadow-emerald-200">
@@ -1476,41 +1760,51 @@ export default function Importacao() {
 
           <div className="space-y-2">
             <h3 className="text-2xl md:text-3xl font-serif font-bold text-crb-navy">
-              Importação Concluída com Sucesso!
+              Carga Concluída com Sucesso!
             </h3>
             <p className="text-slate-500 text-xs md:text-sm max-w-lg mx-auto">
-              O processamento do arquivo de carga foi finalizado. Confira o balanço geral das gravações.
+              Os registros foram processados e gravados com deduplicação por chave natural.
             </p>
           </div>
 
-          {/* 4 Summary Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto text-left">
-            <div className="bg-emerald-50 border border-emerald-200 p-5 rounded-2xl">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 max-w-5xl mx-auto text-left">
+            <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl">
               <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest block mb-1">Criados</span>
               <span className="text-3xl font-serif font-bold text-emerald-800">{finalSummary.criados}</span>
-              <p className="text-[11px] text-emerald-600 mt-1">Novos documentos inseridos</p>
+              <p className="text-[10px] text-emerald-600 mt-1">Novos documentos</p>
             </div>
 
-            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl">
+            <div className="bg-blue-50 border border-blue-200 p-4 rounded-2xl">
               <span className="text-[10px] font-bold text-blue-700 uppercase tracking-widest block mb-1">Atualizados</span>
               <span className="text-3xl font-serif font-bold text-blue-800">{finalSummary.atualizados}</span>
-              <p className="text-[11px] text-blue-600 mt-1">Mesclados sem duplicar</p>
+              <p className="text-[10px] text-blue-600 mt-1">Mesclados sem duplicar</p>
             </div>
 
-            <div className="bg-amber-50 border border-amber-200 p-5 rounded-2xl">
-              <span className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block mb-1">Ignorados</span>
-              <span className="text-3xl font-serif font-bold text-amber-800">{finalSummary.ignorados}</span>
-              <p className="text-[11px] text-amber-600 mt-1">Duplicatas dentro do arquivo</p>
+            <div className="bg-purple-50 border border-purple-200 p-4 rounded-2xl">
+              <span className="text-[10px] font-bold text-purple-700 uppercase tracking-widest block mb-1">Duplicados</span>
+              <span className="text-3xl font-serif font-bold text-purple-800">{finalSummary.ignorados}</span>
+              <p className="text-[10px] text-purple-600 mt-1">Ignorados no arquivo</p>
             </div>
 
-            <div className="bg-red-50 border border-red-200 p-5 rounded-2xl">
+            <div className="bg-amber-50 border border-amber-300 p-4 rounded-2xl">
+              <span className="text-[10px] font-bold text-amber-800 uppercase tracking-widest block mb-1">Com Aviso</span>
+              <span className="text-3xl font-serif font-bold text-amber-900">{finalSummary.comAviso}</span>
+              <p className="text-[10px] text-amber-700 mt-1">Datas ajustadas</p>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 p-4 rounded-2xl">
               <span className="text-[10px] font-bold text-red-700 uppercase tracking-widest block mb-1">Com Erro</span>
               <span className="text-3xl font-serif font-bold text-red-800">{finalSummary.comErro}</span>
-              <p className="text-[11px] text-red-600 mt-1">Linhas rejeitadas</p>
+              <p className="text-[10px] text-red-600 mt-1">Rejeitadas</p>
+            </div>
+
+            <div className="bg-slate-100 border border-slate-200 p-4 rounded-2xl">
+              <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest block mb-1">Separadores</span>
+              <span className="text-3xl font-serif font-bold text-slate-700">{finalSummary.ignoradasSeparadores}</span>
+              <p className="text-[10px] text-slate-500 mt-1">Vazias / títulos</p>
             </div>
           </div>
 
-          {/* Batch failures if any */}
           {batchErrors.length > 0 && (
             <div className="max-w-4xl mx-auto bg-red-50 border border-red-200 p-4 rounded-2xl text-left">
               <div className="flex items-center gap-2 text-red-800 font-bold text-xs uppercase tracking-wider mb-2">
@@ -1524,15 +1818,14 @@ export default function Importacao() {
             </div>
           )}
 
-          {/* Actions */}
           <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
-            {(finalSummary.comErro > 0 || finalSummary.ignorados > 0 || batchErrors.length > 0) && (
+            {(finalSummary.comErro > 0 || finalSummary.comAviso > 0 || finalSummary.ignorados > 0 || batchErrors.length > 0) && (
               <button 
                 onClick={handleDownloadErrorReport}
                 className="flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-2xl font-bold text-xs uppercase tracking-wider shadow-md transition-all cursor-pointer"
               >
                 <Download size={16} />
-                Baixar Relatório de Erros em CSV
+                Baixar Relatório de Inconsistências e Avisos (CSV)
               </button>
             )}
 
@@ -1546,7 +1839,7 @@ export default function Importacao() {
         </motion.div>
       )}
 
-      {/* WIPE DATABASE CONFIRMATION MODAL (EXCLUSIVO PARA ADMIN COM CONFIRMAÇÃO POR TEXTO "LIMPAR") */}
+      {/* MODAL LIMPAR BASE EXCLUSIVO ADMIN */}
       <AnimatePresence>
         {isClearModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
