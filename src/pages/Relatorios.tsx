@@ -35,7 +35,9 @@ import {
   normalizarTipoSolicitacao, 
   normalizarStatusProcesso, 
   normalizarTipoOficio,
-  getAnoDe 
+  getAnoDe,
+  getAnoRegistro,
+  compararNumeroDesc 
 } from '../lib/numeracao';
 
 type ModuleType = 'debitos' | 'notificacoes' | 'negociacoes' | 'oficios' | 'processos';
@@ -94,22 +96,10 @@ export default function Relatorios() {
           }
         });
         oficiosSnap.docs.forEach(doc => {
-          const a = doc.data().ano;
-          if (a && !isNaN(Number(a))) {
-            yearsSet.add(Number(a));
-          } else {
-            const dt = doc.data().dataEnvio || doc.data().dataEmissao || doc.data().createdAt;
-            if (dt) yearsSet.add(getAnoDe(dt));
-          }
+          yearsSet.add(getAnoRegistro(doc.data()));
         });
         processosSnap.docs.forEach(doc => {
-          const a = doc.data().ano;
-          if (a && !isNaN(Number(a))) {
-            yearsSet.add(Number(a));
-          } else {
-            const dt = doc.data().dataSolicitacao || doc.data().dataAbertura || doc.data().createdAt;
-            if (dt) yearsSet.add(getAnoDe(dt));
-          }
+          yearsSet.add(getAnoRegistro(doc.data()));
         });
 
         const sortedYears = Array.from(yearsSet).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
@@ -182,8 +172,11 @@ export default function Relatorios() {
       if (filters.ano) {
         const yearInt = Number(filters.ano);
         results = results.filter((item: any) => {
+          if (filters.module === 'oficios' || filters.module === 'processos') {
+            return getAnoRegistro(item) === yearInt;
+          }
           if (item.ano === yearInt || Number(item.ano) === yearInt) return true;
-          const dateStr = item.dataEnvio || item.dataAcordo || item.dataEmissao || item.dataAbertura || item.dataVencimento || item.createdAt;
+          const dateStr = item.dataEnvio || item.dataAcordo || item.dataEmissao || item.dataAbertura || item.dataSolicitacao || item.dataVencimento || item.createdAt;
           if (dateStr) {
             const dateObj = parseDateSafely(dateStr);
             if (dateObj) return dateObj.getFullYear() === yearInt;
@@ -233,13 +226,8 @@ export default function Relatorios() {
             return rawTipo.toLowerCase().includes(filters.tipo!.toLowerCase());
           });
         }
-        // Ordenação decrescente por sequencial no ano
-        results.sort((a: any, b: any) => {
-          const sA = extrairSeqAno(a.numero);
-          const sB = extrairSeqAno(b.numero);
-          if (sB.ano !== sA.ano) return sB.ano - sA.ano;
-          return sB.seq - sA.seq;
-        });
+        // Ordenação decrescente null-safe (sem número válido vai para o fim da lista)
+        results.sort(compararNumeroDesc);
       }
 
       // Tratamento específico: PROCESSOS
@@ -256,13 +244,8 @@ export default function Relatorios() {
             return normTp.toLowerCase().includes(filters.tipo!.toLowerCase());
           });
         }
-        // Ordenação decrescente por sequencial no ano
-        results.sort((a: any, b: any) => {
-          const sA = extrairSeqAno(a.numero);
-          const sB = extrairSeqAno(b.numero);
-          if (sB.ano !== sA.ano) return sB.ano - sA.ano;
-          return sB.seq - sA.seq;
-        });
+        // Ordenação decrescente null-safe (sem número válido vai para o fim da lista)
+        results.sort(compararNumeroDesc);
       }
 
       setData(results);

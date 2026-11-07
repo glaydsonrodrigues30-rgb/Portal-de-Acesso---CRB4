@@ -61,19 +61,34 @@ export function formatarNumero(seq: number, ano: number): string {
   return `${seqStr}-${safeAno}`;
 }
 
+export interface SeqAno {
+  seq: number;
+  ano: number;
+}
+
 /**
  * Extrai o sequencial numérico e o ano de strings nos mais variados formatos:
  * "001-2026", "001/2026", "CIRC. 004-2026", "037--2026", "OF. 012/2025", "123-26", etc.
+ * NUNCA retorna null: sempre retorna { seq: number, ano: number } com 0 para valores não interpretáveis.
  */
-export function extrairSeqAno(numero: string | null | undefined): { seq: number; ano: number } | null {
-  if (!numero) return null;
+export function extrairSeqAno(
+  numero: string | null | undefined,
+  dataFallback?: string | Date | number | null
+): SeqAno {
+  const fallbackAno = dataFallback ? getAnoDe(dataFallback) : 0;
+  if (!numero) {
+    return { seq: 0, ano: fallbackAno };
+  }
   let s = String(numero).trim();
+  if (!s) {
+    return { seq: 0, ano: fallbackAno };
+  }
 
   // Colapsa múltiplos hífens ou barras
   s = s.replace(/-{2,}/g, '-').replace(/\/{2,}/g, '/');
 
   // 1. Padrão principal: [prefixo opcional] SEQUENCIAL [- ou /] ANO
-  // Ex: "001-2026", "CIRC. 004-2026", "037-2026", "1/2026"
+  // Ex: "001-2026", "CIRC. 004-2026", "037-2026", "1/2026", "OF. 012/2025", "CIRCULAR 04-2026"
   const matchMain = s.match(/(?:^|[^\d])(\d{1,6})\s*[\/\-]\s*(\d{2,4})(?:$|[^\d])/);
   if (matchMain) {
     const seq = parseInt(matchMain[1], 10);
@@ -86,7 +101,7 @@ export function extrairSeqAno(numero: string | null | undefined): { seq: number;
     }
   }
 
-  // 2. Padrão ano primeiro: ANO [- ou /] SEQUENCIAL (ex: 2026-001)
+  // 2. Padrão ano primeiro: ANO [- ou /] SEQUENCIAL (ex: 2026-001, 2026/12)
   const matchYearFirst = s.match(/(?:^|[^\d])(19\d{2}|20\d{2})\s*[\/\-]\s*(\d{1,6})(?:$|[^\d])/);
   if (matchYearFirst) {
     const ano = parseInt(matchYearFirst[1], 10);
@@ -101,11 +116,80 @@ export function extrairSeqAno(numero: string | null | undefined): { seq: number;
   if (loneNumber) {
     const seq = parseInt(loneNumber[1], 10);
     if (seq > 0) {
-      return { seq, ano: new Date().getFullYear() };
+      return { seq, ano: fallbackAno };
     }
   }
 
-  return null;
+  return { seq: 0, ano: fallbackAno };
+}
+
+/**
+ * Obtém o ano representativo do registro com fallback em cascata:
+ * 1) Campo ano se já definido e válido
+ * 2) Ano extraído do número do documento
+ * 3) Ano da data do documento (dataEnvio, dataSolicitacao, etc.)
+ */
+export function getAnoRegistro(reg: any): number {
+  if (!reg) return new Date().getFullYear();
+  if (reg.ano && !isNaN(Number(reg.ano))) {
+    const y = Number(reg.ano);
+    if (y >= 1990 && y <= 2099) return y;
+  }
+  const num = reg.numero || reg.numeroOficio || reg.numeroProcesso;
+  const parsed = extrairSeqAno(num);
+  if (parsed.ano >= 1990 && parsed.ano <= 2099) {
+    return parsed.ano;
+  }
+  return getAnoDe(reg.dataEnvio || reg.dataSolicitacao || reg.dataEmissao || reg.dataAbertura || reg.data || reg.createdAt);
+}
+
+/**
+ * Helper central null-safe para ordenação decrescente por ano e número.
+ * Regras:
+ * - Registros sem número válido (seq === 0) vão para o fim da lista.
+ * - Registros com número válido são ordenados por ano decrescente e sequência decrescente.
+ * - Registros sem número válido são ordenados entre si por data mais recente.
+ */
+export function compararNumeroDesc(a: any, b: any): number {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+
+  const numA = typeof a === 'string' ? a : (a.numero || a.numeroOficio || a.numeroProcesso || '');
+  const numB = typeof b === 'string' ? b : (b.numero || b.numeroOficio || b.numeroProcesso || '');
+
+  const dataA = typeof a === 'object' ? (a.dataEnvio || a.dataSolicitacao || a.dataEmissao || a.dataAbertura || a.createdAt) : null;
+  const dataB = typeof b === 'object' ? (b.dataEnvio || b.dataSolicitacao || b.dataEmissao || b.dataAbertura || b.createdAt) : null;
+
+  const parsedA = extrairSeqAno(numA, dataA);
+  const parsedB = extrairSeqAno(numB, dataB);
+
+  const aValido = parsedA.seq > 0;
+  const bValido = parsedB.seq > 0;
+
+  // Sem número válido vai para o fim da lista
+  if (aValido && !bValido) return -1;
+  if (!aValido && bValido) return 1;
+  if (!aValido && !bValido) {
+    // Ambos sem número válido: ordena por data mais recente se disponível
+    const dtA = dataA ? new Date(dataA).getTime() : 0;
+    const dtB = dataB ? new Date(dataB).getTime() : 0;
+    if (!isNaN(dtA) && !isNaN(dtB) && dtB !== dtA) {
+      return dtB - dtA;
+    }
+    return 0;
+  }
+
+  // Ambos válidos: compara por ano decrescente (ano do número ou fallback da data)
+  const anoA = parsedA.ano || (dataA ? getAnoDe(dataA) : 0);
+  const anoB = parsedB.ano || (dataB ? getAnoDe(dataB) : 0);
+
+  if (anoB !== anoA) {
+    return anoB - anoA;
+  }
+
+  // Mesmo ano: compara por sequência decrescente
+  return parsedB.seq - parsedA.seq;
 }
 
 /**
@@ -135,19 +219,20 @@ export function proximoNumero(
     const numRaw = reg.numeroOficio || reg.numeroProcesso || reg.numero;
     const parsed = extrairSeqAno(numRaw);
 
-    if (parsed) {
-      if (parsed.ano === targetAno) {
-        seqsDoAno.push(parsed.seq);
-      }
+    if (parsed.seq > 0 && parsed.ano === targetAno) {
+      seqsDoAno.push(parsed.seq);
     } else {
       // Se não conseguiu extrair ano do número, checa o ano do registro ou da data
-      const regAno = reg.ano || getAnoDe(reg.dataEnvio || reg.dataSolicitacao || reg.dataEmissao || reg.data || reg.createdAt);
+      const regAno = getAnoRegistro(reg);
       if (regAno === targetAno) {
-        // Tenta pegar dígitos isolados
-        const digits = numRaw ? numRaw.match(/\d+/) : null;
-        if (digits) {
-          const val = parseInt(digits[0], 10);
-          if (val > 0) seqsDoAno.push(val);
+        if (parsed.seq > 0) {
+          seqsDoAno.push(parsed.seq);
+        } else if (numRaw) {
+          const digits = String(numRaw).match(/\d+/);
+          if (digits) {
+            const val = parseInt(digits[0], 10);
+            if (val > 0) seqsDoAno.push(val);
+          }
         }
       }
     }
@@ -177,8 +262,8 @@ export function existeNumeroNoAno(
 ): boolean {
   if (!numero) return false;
   const targetParsed = extrairSeqAno(numero);
-  const targetAno = targetParsed?.ano || ano;
-  const targetSeq = targetParsed?.seq;
+  const targetAno = targetParsed.ano || ano;
+  const targetSeq = targetParsed.seq;
 
   const targetClean = String(numero).replace(/\s+/g, '').toLowerCase().replace(/--+/g, '-');
 
@@ -189,11 +274,11 @@ export function existeNumeroNoAno(
     if (!regNum) continue;
 
     const regParsed = extrairSeqAno(regNum);
-    const regAno = regParsed?.ano || reg.ano || getAnoDe(reg.dataEnvio || reg.dataSolicitacao || reg.dataEmissao);
+    const regAno = regParsed.ano || reg.ano || getAnoDe(reg.dataEnvio || reg.dataSolicitacao || reg.dataEmissao);
 
     if (regAno === targetAno) {
-      // Comparação por número de sequência no mesmo ano
-      if (targetSeq && regParsed?.seq && targetSeq === regParsed.seq) {
+      // Comparação por número de sequência no mesmo ano se ambos forem válidos
+      if (targetSeq > 0 && regParsed.seq > 0 && targetSeq === regParsed.seq) {
         return true;
       }
       // Comparação por texto limpo

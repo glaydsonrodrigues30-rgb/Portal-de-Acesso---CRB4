@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { collection, query, getDocs, limit } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { getAnoDe } from '../../lib/numeracao';
+import { getAnoDe, getAnoRegistro } from '../../lib/numeracao';
 import OficiosSummaryPanel from '../OficiosSummaryPanel';
 import { Oficio } from '../../types';
 import { Loader2, Users } from 'lucide-react';
@@ -36,12 +36,7 @@ export default function OficiosView() {
     setAnos.add(currentYear);
 
     oficios.forEach(o => {
-      if (o.ano && !isNaN(Number(o.ano))) {
-        setAnos.add(Number(o.ano));
-      } else {
-        const anoCalc = getAnoDe(o.dataEnvio || o.dataEmissao || o.createdAt);
-        setAnos.add(anoCalc);
-      }
+      setAnos.add(getAnoRegistro(o));
     });
 
     return Array.from(setAnos).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
@@ -52,9 +47,7 @@ export default function OficiosView() {
     if (!selectedAno) return oficios;
     const anoInt = Number(selectedAno);
     return oficios.filter(o => {
-      if (o.ano && Number(o.ano) === anoInt) return true;
-      const anoCalc = getAnoDe(o.dataEnvio || o.dataEmissao || o.createdAt);
-      return anoCalc === anoInt;
+      return getAnoRegistro(o) === anoInt;
     });
   }, [oficios, selectedAno]);
 

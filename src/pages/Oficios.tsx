@@ -34,7 +34,9 @@ import {
   proximoNumero, 
   extrairSeqAno, 
   existeNumeroNoAno, 
-  normalizarTipoOficio 
+  normalizarTipoOficio,
+  getAnoRegistro,
+  compararNumeroDesc 
 } from '../lib/numeracao';
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -123,10 +125,9 @@ export default function Oficios() {
     const set = new Set<number>();
     set.add(CURRENT_YEAR);
     oficios.forEach(o => {
-      const a = o.ano || getAnoDe(o.dataEnvio || o.dataEmissao);
-      if (a) set.add(a);
+      set.add(getAnoRegistro(o));
     });
-    return Array.from(set).sort((a, b) => b - a);
+    return Array.from(set).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
   }, [oficios]);
 
   // Lista dinâmica de tipos de ofício
@@ -258,7 +259,7 @@ export default function Oficios() {
       // Filtro de ano estrito
       let matchesAno = true;
       if (searchAno && searchAno !== 'TODOS') {
-        const itemAno = o.ano || extrairSeqAno(o.numeroOficio || o.numero)?.ano || getAnoDe(o.dataEnvio || o.dataEmissao);
+        const itemAno = getAnoRegistro(o);
         matchesAno = itemAno.toString() === searchAno;
       }
 
@@ -270,16 +271,7 @@ export default function Oficios() {
       }
 
       return (matchesSubject || matchesDest || matchesNum) && matchesAno && matchesTipo;
-    }).sort((a, b) => {
-      // Ordenação decrescente por número dentro do ano
-      const seqA = extrairSeqAno(a.numeroOficio || a.numero)?.seq || 0;
-      const seqB = extrairSeqAno(b.numeroOficio || b.numero)?.seq || 0;
-      if (seqB !== seqA) return seqB - seqA;
-
-      const dateA = new Date(a.dataEnvio || a.dataEmissao || 0).getTime();
-      const dateB = new Date(b.dataEnvio || b.dataEmissao || 0).getTime();
-      return dateB - dateA;
-    });
+    }).sort(compararNumeroDesc);
   }, [oficios, searchTerm, searchAno, searchTipo]);
 
   const formAnoAtual = getAnoDe(editingOficio?.dataEnvio || editingOficio?.dataEmissao);

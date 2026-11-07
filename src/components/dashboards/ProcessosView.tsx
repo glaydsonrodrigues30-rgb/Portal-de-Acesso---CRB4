@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { collection, query, getDocs, limit } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { getAnoDe } from '../../lib/numeracao';
+import { getAnoDe, getAnoRegistro } from '../../lib/numeracao';
 import ProcessosSummaryPanel from '../ProcessosSummaryPanel';
 import { Processo } from '../../types';
 import { Loader2, AlertCircle, Clock, CheckCircle2 } from 'lucide-react';
@@ -36,12 +36,7 @@ export default function ProcessosView() {
     setAnos.add(currentYear);
 
     processos.forEach(p => {
-      if (p.ano && !isNaN(Number(p.ano))) {
-        setAnos.add(Number(p.ano));
-      } else {
-        const anoCalc = getAnoDe(p.dataSolicitacao || p.dataAbertura || p.createdAt);
-        setAnos.add(anoCalc);
-      }
+      setAnos.add(getAnoRegistro(p));
     });
 
     return Array.from(setAnos).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
@@ -52,9 +47,7 @@ export default function ProcessosView() {
     if (!selectedAno) return processos;
     const anoInt = Number(selectedAno);
     return processos.filter(p => {
-      if (p.ano && Number(p.ano) === anoInt) return true;
-      const anoCalc = getAnoDe(p.dataSolicitacao || p.dataAbertura || p.createdAt);
-      return anoCalc === anoInt;
+      return getAnoRegistro(p) === anoInt;
     });
   }, [processos, selectedAno]);
 

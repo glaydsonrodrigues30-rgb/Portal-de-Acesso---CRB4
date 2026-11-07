@@ -103,9 +103,21 @@ export default function OficiosSummaryPanel({
       // Mês
       const dtStr = o.dataEnvio || o.dataEmissao || o.createdAt;
       if (dtStr) {
-        const d = new Date(dtStr);
-        if (!isNaN(d.getTime())) {
-          const m = d.getMonth();
+        let m: number | null = null;
+        if (typeof dtStr === 'string' && dtStr.includes('/')) {
+          const parts = dtStr.split('/');
+          if (parts.length >= 2) {
+            const mesNum = parseInt(parts[1], 10);
+            if (mesNum >= 1 && mesNum <= 12) m = mesNum - 1;
+          }
+        }
+        if (m === null) {
+          const d = new Date(dtStr);
+          if (!isNaN(d.getTime())) {
+            m = d.getMonth();
+          }
+        }
+        if (m !== null) {
           mapMeses[m] = (mapMeses[m] || 0) + 1;
         }
       }

@@ -35,7 +35,9 @@ import {
   extrairSeqAno, 
   existeNumeroNoAno, 
   normalizarStatusProcesso,
-  normalizarTipoSolicitacao
+  normalizarTipoSolicitacao,
+  getAnoRegistro,
+  compararNumeroDesc 
 } from '../lib/numeracao';
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -124,10 +126,9 @@ export default function Processos() {
     const set = new Set<number>();
     set.add(CURRENT_YEAR);
     processos.forEach(p => {
-      const a = p.ano || getAnoDe(p.dataSolicitacao || p.dataAbertura);
-      if (a) set.add(a);
+      set.add(getAnoRegistro(p));
     });
-    return Array.from(set).sort((a, b) => b - a);
+    return Array.from(set).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
   }, [processos]);
 
   // Abertura do formulário de Novo Processo com preenchimento automático
@@ -249,7 +250,7 @@ export default function Processos() {
       // Filtro de ano
       let matchesAno = true;
       if (searchAno && searchAno !== 'TODOS') {
-        const itemAno = p.ano || extrairSeqAno(p.numeroProcesso || p.numero)?.ano || getAnoDe(p.dataSolicitacao || p.dataAbertura);
+        const itemAno = getAnoRegistro(p);
         matchesAno = itemAno.toString() === searchAno;
       }
 
@@ -259,16 +260,7 @@ export default function Processos() {
       }
 
       return (matchesProfessional || matchesNum || matchesRequest) && matchesStatus && matchesAno;
-    }).sort((a, b) => {
-      // Ordenação decrescente por número dentro do ano
-      const seqA = extrairSeqAno(a.numeroProcesso || a.numero)?.seq || 0;
-      const seqB = extrairSeqAno(b.numeroProcesso || b.numero)?.seq || 0;
-      if (seqB !== seqA) return seqB - seqA;
-
-      const dateA = new Date(a.dataSolicitacao || a.dataAbertura || 0).getTime();
-      const dateB = new Date(b.dataSolicitacao || b.dataAbertura || 0).getTime();
-      return dateB - dateA;
-    });
+    }).sort(compararNumeroDesc);
   }, [processos, searchTerm, searchAno, searchStatus]);
 
   const formAnoAtual = getAnoDe(editingProcesso?.dataSolicitacao || editingProcesso?.dataAbertura);
