@@ -7,7 +7,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
-import html2canvas from 'html2canvas';
 import { 
   normalizarStatusProcesso, 
   normalizarTipoSolicitacao, 
@@ -112,108 +111,365 @@ function aplicarRodapeGlobal(doc: jsPDF) {
   }
 }
 
-/**
- * Desenha fallback de gráficos para Processos caso a captura com html2canvas falhe
- */
-function desenharFallbackGraficosProcessos(doc: jsPDF, topTipos: Array<{ tipo: string; qtd: number }>, statusCounts: Record<string, number>, total: number, startY: number) {
+const PALETA_HEX = [
+  '#1e3a8a', // Azul Marinho CRB
+  '#7c3aed', // Roxo Institucional
+  '#059669', // Verde Esmeralda
+  '#d97706', // Âmbar / Laranja
+  '#0284c7', // Azul Céu
+  '#dc2626', // Vermelho
+  '#475569', // Slate
+  '#8b5cf6'  // Violeta
+];
+
+const STATUS_HEX: Record<string, string> = {
+  'Deferido': '#059669',
+  'Indeferido': '#dc2626',
+  'Aguardando Plenária': '#1e3a8a',
+  'Em Análise': '#7c3aed',
+  'Pendente': '#d97706',
+  'Ad Referendum': '#8b5cf6',
+  'Sobrestado': '#475569',
+  'Enviado': '#059669',
+  'Aguardando Envio': '#7c3aed',
+  'Cancelado': '#dc2626',
+  'Outros': '#64748b'
+};
+
+const MESES_ABREV = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+function hexToRgb(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return [isNaN(r) ? 30 : r, isNaN(g) ? 58 : g, isNaN(b) ? 138 : b];
+}
+
+function setDocFillHex(doc: jsPDF, hex: string) {
+  const [r, g, b] = hexToRgb(hex);
+  doc.setFillColor(r, g, b);
+}
+
+function setDocDrawHex(doc: jsPDF, hex: string) {
+  const [r, g, b] = hexToRgb(hex);
+  doc.setDrawColor(r, g, b);
+}
+
+function setDocTextHex(doc: jsPDF, hex: string) {
+  const [r, g, b] = hexToRgb(hex);
+  doc.setTextColor(r, g, b);
+}
+
+function desenharPainelCard(
+  doc: jsPDF,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  titulo: string,
+  subtitulo: string,
+  corDestaqueHex: string = '#1e3a8a'
+) {
+  setDocFillHex(doc, '#ffffff');
+  setDocDrawHex(doc, '#e2e8f0');
+  doc.setLineWidth(0.4);
+  doc.roundedRect(x, y, w, h, 2, 2, 'FD');
+
+  setDocFillHex(doc, corDestaqueHex);
+  doc.rect(x + 3.5, y + 3.5, 1.8, 6.5, 'F');
+
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(30, 58, 138);
-  doc.text('Distribuição por Solicitação (Top 5)', 14, startY);
-  doc.text('Distribuição por Status', 150, startY);
+  doc.setFontSize(7.8);
+  setDocTextHex(doc, '#1e3a8a');
+  doc.text(titulo, x + 7.5, y + 7.2);
 
-  let y = startY + 6;
-  const maxQtd = topTipos.length > 0 ? topTipos[0].qtd : 1;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(5.8);
+  setDocTextHex(doc, '#64748b');
+  doc.text(subtitulo, x + 7.5, y + 10.5);
 
-  // Barras horizontais Top 5 Tipos
-  topTipos.slice(0, 5).forEach(item => {
+  setDocDrawHex(doc, '#f1f5f9');
+  doc.line(x + 3.5, y + 12.8, x + w - 3.5, y + 12.8);
+}
+
+/**
+ * Desenha os 3 gráficos analíticos para Processos diretamente com formas nativas no jsPDF
+ */
+function desenharGraficosNativosProcessos(
+  doc: jsPDF,
+  topTipos: Array<{ tipo: string; qtd: number }>,
+  statusCounts: Record<string, number>,
+  evolucaoMensal: number[],
+  total: number,
+  startY: number
+) {
+  const cardH = 70;
+
+  // 1. Barras por Tipo de Solicitação (w = 90)
+  const c1X = 14;
+  const c1W = 90;
+  desenharPainelCard(doc, c1X, startY, c1W, cardH, 'Tipos de Solicitação', 'Top pedidos protocolados no período', '#7c3aed');
+
+  const maxQtdTipo = Math.max(...topTipos.map(t => t.qtd), 1);
+  let yTipo = startY + 16.5;
+  const barAreaW = 34;
+  const tiposMostrados = topTipos.slice(0, 5);
+
+  if (tiposMostrados.length === 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7);
+    setDocTextHex(doc, '#94a3b8');
+    doc.text('Nenhuma solicitação registrada.', c1X + 10, yTipo + 15);
+  } else {
+    tiposMostrados.forEach((item, idx) => {
+      const cor = PALETA_HEX[idx % PALETA_HEX.length];
+      const barW = Math.max(1.5, (item.qtd / maxQtdTipo) * barAreaW);
+      const pct = total > 0 ? ((item.qtd / total) * 100).toFixed(1) : '0';
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#334155');
+      const rotulo = item.tipo.length > 20 ? item.tipo.slice(0, 19) + '…' : item.tipo;
+      doc.text(rotulo, c1X + 4.5, yTipo + 3.8);
+
+      setDocFillHex(doc, '#f1f5f9');
+      doc.roundedRect(c1X + 37, yTipo, barAreaW, 4.8, 1, 1, 'F');
+
+      setDocFillHex(doc, cor);
+      doc.roundedRect(c1X + 37, yTipo, barW, 4.8, 1, 1, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#1e293b');
+      doc.text(`${item.qtd} (${pct}%)`, c1X + 37 + barAreaW + 2, yTipo + 3.8);
+
+      yTipo += 10;
+    });
+  }
+
+  // 2. Distribuição por Status (w = 88)
+  const c2X = 108;
+  const c2W = 88;
+  desenharPainelCard(doc, c2X, startY, c2W, cardH, 'Distribuição por Status', 'Estágio processual e deliberações', '#059669');
+
+  const statusEntries = Object.entries(statusCounts)
+    .filter(([_, qtd]) => qtd > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  let ySt = startY + 16.5;
+  const maxStQtd = Math.max(...statusEntries.map(([_, q]) => q), 1);
+  const stBarAreaW = 30;
+
+  if (statusEntries.length === 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7);
+    setDocTextHex(doc, '#94a3b8');
+    doc.text('Sem dados de status.', c2X + 10, ySt + 15);
+  } else {
+    statusEntries.forEach(([st, qtd]) => {
+      const cor = STATUS_HEX[st] || '#64748b';
+      const barW = Math.max(1.5, (qtd / maxStQtd) * stBarAreaW);
+      const pct = total > 0 ? ((qtd / total) * 100).toFixed(1) : '0';
+
+      setDocFillHex(doc, cor);
+      doc.circle(c2X + 6.5, ySt + 2.5, 1.8, 'F');
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#334155');
+      const nomeSt = st.length > 17 ? st.slice(0, 16) + '…' : st;
+      doc.text(nomeSt, c2X + 10, ySt + 3.8);
+
+      setDocFillHex(doc, '#f1f5f9');
+      doc.roundedRect(c2X + 41, ySt, stBarAreaW, 4.8, 1, 1, 'F');
+
+      setDocFillHex(doc, cor);
+      doc.roundedRect(c2X + 41, ySt, barW, 4.8, 1, 1, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#1e293b');
+      doc.text(`${qtd} (${pct}%)`, c2X + 41 + stBarAreaW + 2, ySt + 3.8);
+
+      ySt += 10;
+    });
+  }
+
+  // 3. Evolução Mensal de Solicitações (w = 83)
+  const c3X = 200;
+  const c3W = 83;
+  desenharPainelCard(doc, c3X, startY, c3W, cardH, 'Evolução Mensal', 'Volume de entradas por mês do ano', '#1e3a8a');
+
+  const maxMesQtd = Math.max(...evolucaoMensal, 1);
+  const baselineY = startY + 58;
+  const maxBarH = 34;
+  const slotW = (c3W - 10) / 12;
+  const barW = 3.2;
+
+  setDocDrawHex(doc, '#cbd5e1');
+  doc.setLineWidth(0.4);
+  doc.line(c3X + 4, baselineY, c3X + c3W - 4, baselineY);
+
+  evolucaoMensal.forEach((qtd, i) => {
+    const slotX = c3X + 5 + i * slotW;
+    const barX = slotX + (slotW - barW) / 2;
+
+    if (qtd > 0) {
+      const barH = Math.max(1.8, (qtd / maxMesQtd) * maxBarH);
+      const barY = baselineY - barH;
+
+      setDocFillHex(doc, '#1e3a8a');
+      doc.roundedRect(barX, barY, barW, barH, 0.6, 0.6, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.5);
+      setDocTextHex(doc, '#1e3a8a');
+      doc.text(String(qtd), barX + barW / 2, barY - 1.2, { align: 'center' });
+    }
+
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(item.tipo.length > 28 ? item.tipo.slice(0, 28) + '...' : item.tipo, 14, y + 4);
-
-    const barW = Math.max(4, (item.qtd / maxQtd) * 70);
-    doc.setFillColor(124, 58, 237); // Purple
-    doc.roundedRect(65, y, barW, 5, 1, 1, 'F');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(30, 58, 138);
-    doc.text(String(item.qtd), 65 + barW + 3, y + 4);
-
-    y += 8;
-  });
-
-  // Tabela/Retângulos de Status
-  let ySt = startY + 6;
-  const stEntries = Object.entries(statusCounts).filter(([_, v]) => v > 0);
-  stEntries.slice(0, 5).forEach(([st, qtd]) => {
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(226, 232, 240);
-    doc.roundedRect(150, ySt - 1, 120, 6.5, 1, 1, 'FD');
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(51, 65, 85);
-    doc.text(st, 153, ySt + 3.5);
-
-    const pct = total > 0 ? ((qtd / total) * 100).toFixed(1) : '0';
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 58, 138);
-    doc.text(`${qtd} (${pct}%)`, 265, ySt + 3.5, { align: 'right' });
-
-    ySt += 8;
+    doc.setFontSize(5);
+    setDocTextHex(doc, '#64748b');
+    doc.text(MESES_ABREV[i], barX + barW / 2, baselineY + 4, { align: 'center' });
   });
 }
 
 /**
- * Desenha fallback de gráficos para Ofícios caso a captura com html2canvas falhe
+ * Desenha os 3 gráficos analíticos para Ofícios diretamente com formas nativas no jsPDF
  */
-function desenharFallbackGraficosOficios(doc: jsPDF, topTipos: Array<{ tipo: string; qtd: number }>, topAssuntos: Array<{ assunto: string; qtd: number }>, startY: number) {
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.setTextColor(30, 58, 138);
-  doc.text('Distribuição por Tipo de Ofício', 14, startY);
-  doc.text('Assuntos Mais Frequentes (Top 5)', 150, startY);
+function desenharGraficosNativosOficios(
+  doc: jsPDF,
+  topTipos: Array<{ tipo: string; qtd: number }>,
+  topAssuntos: Array<{ assunto: string; qtd: number }>,
+  statusCounts: Record<string, number>,
+  evolucaoMensal: number[],
+  total: number,
+  startY: number
+) {
+  const cardH = 70;
 
-  let y = startY + 6;
-  const maxQtdTipo = topTipos.length > 0 ? topTipos[0].qtd : 1;
-  topTipos.slice(0, 5).forEach(item => {
+  // 1. Modalidades de Ofício (w = 88)
+  const c1X = 14;
+  const c1W = 88;
+  desenharPainelCard(doc, c1X, startY, c1W, cardH, 'Modalidades de Ofício', 'Tipos expedidos (Presidente, Administrativo, etc.)', '#1e3a8a');
+
+  const maxQtdTipo = Math.max(...topTipos.map(t => t.qtd), 1);
+  let yTipo = startY + 16.5;
+  const barAreaW = 34;
+  const tiposMostrados = topTipos.slice(0, 5);
+
+  if (tiposMostrados.length === 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7);
+    setDocTextHex(doc, '#94a3b8');
+    doc.text('Nenhum ofício registrado.', c1X + 10, yTipo + 15);
+  } else {
+    tiposMostrados.forEach((item, idx) => {
+      const cor = PALETA_HEX[idx % PALETA_HEX.length];
+      const barW = Math.max(1.5, (item.qtd / maxQtdTipo) * barAreaW);
+      const pct = total > 0 ? ((item.qtd / total) * 100).toFixed(1) : '0';
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#334155');
+      const rotulo = item.tipo.length > 20 ? item.tipo.slice(0, 19) + '…' : item.tipo;
+      doc.text(rotulo, c1X + 4.5, yTipo + 3.8);
+
+      setDocFillHex(doc, '#f1f5f9');
+      doc.roundedRect(c1X + 37, yTipo, barAreaW, 4.8, 1, 1, 'F');
+
+      setDocFillHex(doc, cor);
+      doc.roundedRect(c1X + 37, yTipo, barW, 4.8, 1, 1, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#1e293b');
+      doc.text(`${item.qtd} (${pct}%)`, c1X + 37 + barAreaW + 2, yTipo + 3.8);
+
+      yTipo += 10;
+    });
+  }
+
+  // 2. Assuntos Mais Frequentes (w = 92)
+  const c2X = 106;
+  const c2W = 92;
+  desenharPainelCard(doc, c2X, startY, c2W, cardH, 'Assuntos Mais Frequentes', 'Temas principais tratados nas correspondências', '#059669');
+
+  const maxQtdAssunto = Math.max(...topAssuntos.map(a => a.qtd), 1);
+  let yAss = startY + 16.5;
+  const assBarAreaW = 32;
+  const assuntosMostrados = topAssuntos.slice(0, 5);
+
+  if (assuntosMostrados.length === 0) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7);
+    setDocTextHex(doc, '#94a3b8');
+    doc.text('Sem dados de assuntos.', c2X + 10, yAss + 15);
+  } else {
+    assuntosMostrados.forEach((item) => {
+      const cor = '#059669';
+      const barW = Math.max(1.5, (item.qtd / maxQtdAssunto) * assBarAreaW);
+      const pct = total > 0 ? ((item.qtd / total) * 100).toFixed(1) : '0';
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#334155');
+      const rotulo = item.assunto.length > 21 ? item.assunto.slice(0, 20) + '…' : item.assunto;
+      doc.text(rotulo, c2X + 4.5, yAss + 3.8);
+
+      setDocFillHex(doc, '#f1f5f9');
+      doc.roundedRect(c2X + 41, yAss, assBarAreaW, 4.8, 1, 1, 'F');
+
+      setDocFillHex(doc, cor);
+      doc.roundedRect(c2X + 41, yAss, barW, 4.8, 1, 1, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      setDocTextHex(doc, '#1e293b');
+      doc.text(`${item.qtd} (${pct}%)`, c2X + 41 + assBarAreaW + 2, yAss + 3.8);
+
+      yAss += 10;
+    });
+  }
+
+  // 3. Evolução Mensal de Expedição (w = 81)
+  const c3X = 202;
+  const c3W = 81;
+  desenharPainelCard(doc, c3X, startY, c3W, cardH, 'Evolução Mensal', 'Volume de ofícios emitidos ao longo do ano', '#7c3aed');
+
+  const maxMesQtd = Math.max(...evolucaoMensal, 1);
+  const baselineY = startY + 58;
+  const maxBarH = 34;
+  const slotW = (c3W - 10) / 12;
+  const barW = 3.2;
+
+  setDocDrawHex(doc, '#cbd5e1');
+  doc.setLineWidth(0.4);
+  doc.line(c3X + 4, baselineY, c3X + c3W - 4, baselineY);
+
+  evolucaoMensal.forEach((qtd, i) => {
+    const slotX = c3X + 5 + i * slotW;
+    const barX = slotX + (slotW - barW) / 2;
+
+    if (qtd > 0) {
+      const barH = Math.max(1.8, (qtd / maxMesQtd) * maxBarH);
+      const barY = baselineY - barH;
+
+      setDocFillHex(doc, '#7c3aed');
+      doc.roundedRect(barX, barY, barW, barH, 0.6, 0.6, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.5);
+      setDocTextHex(doc, '#7c3aed');
+      doc.text(String(qtd), barX + barW / 2, barY - 1.2, { align: 'center' });
+    }
+
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(item.tipo, 14, y + 4);
-
-    const barW = Math.max(4, (item.qtd / maxQtdTipo) * 70);
-    doc.setFillColor(30, 58, 138); // Navy
-    doc.roundedRect(65, y, barW, 5, 1, 1, 'F');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(30, 58, 138);
-    doc.text(String(item.qtd), 65 + barW + 3, y + 4);
-
-    y += 8;
-  });
-
-  let yAss = startY + 6;
-  const maxQtdAss = topAssuntos.length > 0 ? topAssuntos[0].qtd : 1;
-  topAssuntos.slice(0, 5).forEach(item => {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(item.assunto, 150, yAss + 4);
-
-    const barW = Math.max(4, (item.qtd / maxQtdAss) * 70);
-    doc.setFillColor(16, 185, 129); // Emerald
-    doc.roundedRect(200, yAss, barW, 5, 1, 1, 'F');
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(16, 185, 129);
-    doc.text(String(item.qtd), 200 + barW + 3, yAss + 4);
-
-    yAss += 8;
+    doc.setFontSize(5);
+    setDocTextHex(doc, '#64748b');
+    doc.text(MESES_ABREV[i], barX + barW / 2, baselineY + 4, { align: 'center' });
   });
 }
 
@@ -248,6 +504,7 @@ export async function exportarRelatorioPdfProcessos(
   const mapTipos: Record<string, number> = {};
   const COLUNAS_STATUS = ['Deferido', 'Indeferido', 'Aguardando Plenária', 'Em Análise', 'Pendente', 'Ad Referendum', 'Outros'];
   const matrizCruzada: Record<string, Record<string, number>> = {};
+  const evolucaoMensal = new Array(12).fill(0);
 
   sorted.forEach(p => {
     const stNorm = normalizarStatusProcesso(p.status);
@@ -264,6 +521,28 @@ export async function exportarRelatorioPdfProcessos(
     }
     const stCol = COLUNAS_STATUS.includes(stNorm) ? stNorm : 'Outros';
     matrizCruzada[tpNorm][stCol] = (matrizCruzada[tpNorm][stCol] || 0) + 1;
+
+    // Extração do mês de solicitação
+    const dtStr = p.dataSolicitacao || p.dataAbertura || p.createdAt || p.data;
+    if (dtStr) {
+      let m: number | null = null;
+      if (typeof dtStr === 'string' && dtStr.includes('/')) {
+        const parts = dtStr.split('/');
+        if (parts.length >= 2) {
+          const mesNum = parseInt(parts[1], 10);
+          if (mesNum >= 1 && mesNum <= 12) m = mesNum - 1;
+        }
+      }
+      if (m === null) {
+        const d = new Date(dtStr);
+        if (!isNaN(d.getTime())) {
+          m = d.getMonth();
+        }
+      }
+      if (m !== null && m >= 0 && m < 12) {
+        evolucaoMensal[m]++;
+      }
+    }
   });
 
   const topTipos = Object.entries(mapTipos)
@@ -419,54 +698,27 @@ export async function exportarRelatorioPdfProcessos(
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
-  doc.setTextColor(30, 58, 138);
-  doc.text('Visão Gráfica e Tabela Cruzada (Tipo x Status)', 14, 16);
+  setDocTextHex(doc, '#1e3a8a');
+  doc.text('Visão Gráfica Analítica e Tabela Cruzada (Tipo x Status)', 14, 16);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Captura dos indicadores visuais e consolidação bidirecional das deliberações', 14, 21);
+  setDocTextHex(doc, '#64748b');
+  doc.text('Indicadores quantitativos por modalidade, status e evolução temporal com matriz deliberativa', 14, 21);
 
-  doc.setDrawColor(226, 232, 240);
+  setDocDrawHex(doc, '#e2e8f0');
   doc.setLineWidth(0.4);
   doc.line(14, 23, 283, 23);
 
-  // Tentativa de captura via html2canvas dos gráficos
-  let graficosInseridos = false;
-  const graficosElem = document.getElementById('painel-processos-graficos');
+  // Desenha os 3 gráficos analíticos diretamente com formas nativas no jsPDF
+  desenharGraficosNativosProcessos(doc, topTipos, statusCounts, evolucaoMensal, total, 26);
 
-  if (graficosElem) {
-    try {
-      const canvas = await html2canvas(graficosElem, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff'
-      });
-      const imgData = canvas.toDataURL('image/png');
-      // Adiciona na página 2 ocupando largura total utilizável (269mm) e altura proporcional
-      const imgWidth = 269;
-      const imgHeight = Math.min(78, (canvas.height * imgWidth) / canvas.width);
-      doc.addImage(imgData, 'PNG', 14, 26, imgWidth, imgHeight);
-      graficosInseridos = true;
-    } catch (e) {
-      console.warn('Captura html2canvas falhou, usando fallback nativo jsPDF:', e);
-    }
-  }
-
-  let tabelaCruzadaStartY = 30;
-  if (graficosInseridos) {
-    tabelaCruzadaStartY = 110;
-  } else {
-    // Desenha fallback nativo jsPDF
-    desenharFallbackGraficosProcessos(doc, topTipos, statusCounts, total, 28);
-    tabelaCruzadaStartY = 80;
-  }
+  const tabelaCruzadaStartY = 104;
 
   // Tabela Cruzada: Tipo de Solicitação x Status
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.setTextColor(30, 58, 138);
+  setDocTextHex(doc, '#1e3a8a');
   doc.text('Tabela Cruzada: Solicitação x Situação Deliberativa', 14, tabelaCruzadaStartY - 3);
 
   const cruzadaHead = ['Tipo de Solicitação', ...COLUNAS_STATUS, 'Total'];
@@ -616,6 +868,7 @@ export async function exportarRelatorioPdfOficios(
   const mapAssuntos: Record<string, number> = {};
   const COLUNAS_STATUS_OFICIOS = ['Enviado', 'Aguardando Envio', 'Pendente', 'Cancelado', 'Outros'];
   const matrizCruzada: Record<string, Record<string, number>> = {};
+  const evolucaoMensalOficios = new Array(12).fill(0);
 
   sorted.forEach(o => {
     const rawSt = String(o.status || '').trim();
@@ -642,6 +895,28 @@ export async function exportarRelatorioPdfOficios(
     }
     const stCol = COLUNAS_STATUS_OFICIOS.includes(stNorm) ? stNorm : 'Outros';
     matrizCruzada[tpNorm][stCol] = (matrizCruzada[tpNorm][stCol] || 0) + 1;
+
+    // Extração do mês de envio do ofício
+    const dtStr = o.dataEnvio || o.dataEmissao || o.data || o.createdAt;
+    if (dtStr) {
+      let m: number | null = null;
+      if (typeof dtStr === 'string' && dtStr.includes('/')) {
+        const parts = dtStr.split('/');
+        if (parts.length >= 2) {
+          const mesNum = parseInt(parts[1], 10);
+          if (mesNum >= 1 && mesNum <= 12) m = mesNum - 1;
+        }
+      }
+      if (m === null) {
+        const d = new Date(dtStr);
+        if (!isNaN(d.getTime())) {
+          m = d.getMonth();
+        }
+      }
+      if (m !== null && m >= 0 && m < 12) {
+        evolucaoMensalOficios[m]++;
+      }
+    }
   });
 
   const topTipos = Object.entries(mapTipos)
@@ -795,51 +1070,27 @@ export async function exportarRelatorioPdfOficios(
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
-  doc.setTextColor(30, 58, 138);
-  doc.text('Visão Gráfica e Tabela Cruzada (Tipo x Status)', 14, 16);
+  setDocTextHex(doc, '#1e3a8a');
+  doc.text('Visão Gráfica Analítica e Tabela Cruzada (Tipo x Status)', 14, 16);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text('Demonstrativo analítico das correspondências oficiais por tipo e situação', 14, 21);
+  setDocTextHex(doc, '#64748b');
+  doc.text('Demonstrativo analítico das correspondências oficiais por tipo, assunto e evolução temporal', 14, 21);
 
-  doc.setDrawColor(226, 232, 240);
+  setDocDrawHex(doc, '#e2e8f0');
   doc.setLineWidth(0.4);
   doc.line(14, 23, 283, 23);
 
-  let graficosInseridos = false;
-  const graficosElem = document.getElementById('painel-oficios-graficos');
+  // Desenha os 3 gráficos analíticos diretamente com formas nativas no jsPDF
+  desenharGraficosNativosOficios(doc, topTipos, topAssuntos, statusCounts, evolucaoMensalOficios, total, 26);
 
-  if (graficosElem) {
-    try {
-      const canvas = await html2canvas(graficosElem, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff'
-      });
-      const imgData = canvas.toDataURL('image/png');
-      const imgWidth = 269;
-      const imgHeight = Math.min(78, (canvas.height * imgWidth) / canvas.width);
-      doc.addImage(imgData, 'PNG', 14, 26, imgWidth, imgHeight);
-      graficosInseridos = true;
-    } catch (e) {
-      console.warn('Captura html2canvas falhou para ofícios:', e);
-    }
-  }
-
-  let tabelaCruzadaStartY = 30;
-  if (graficosInseridos) {
-    tabelaCruzadaStartY = 110;
-  } else {
-    desenharFallbackGraficosOficios(doc, topTipos, topAssuntos, 28);
-    tabelaCruzadaStartY = 80;
-  }
+  const tabelaCruzadaStartY = 104;
 
   // Tabela Cruzada: Tipo x Status
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.setTextColor(30, 58, 138);
+  setDocTextHex(doc, '#1e3a8a');
   doc.text('Tabela Cruzada: Modalidade de Ofício x Status', 14, tabelaCruzadaStartY - 3);
 
   const cruzadaHead = ['Tipo de Ofício', ...COLUNAS_STATUS_OFICIOS, 'Total'];
