@@ -28,6 +28,15 @@ import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
+import OficiosSummaryPanel from '../components/OficiosSummaryPanel';
+import ProcessosSummaryPanel from '../components/ProcessosSummaryPanel';
+import { 
+  extrairSeqAno, 
+  normalizarTipoSolicitacao, 
+  normalizarStatusProcesso, 
+  normalizarTipoOficio,
+  getAnoDe 
+} from '../lib/numeracao';
 
 type ModuleType = 'debitos' | 'notificacoes' | 'negociacoes' | 'oficios' | 'processos';
 
@@ -86,11 +95,21 @@ export default function Relatorios() {
         });
         oficiosSnap.docs.forEach(doc => {
           const a = doc.data().ano;
-          if (a && !isNaN(Number(a))) yearsSet.add(Number(a));
+          if (a && !isNaN(Number(a))) {
+            yearsSet.add(Number(a));
+          } else {
+            const dt = doc.data().dataEnvio || doc.data().dataEmissao || doc.data().createdAt;
+            if (dt) yearsSet.add(getAnoDe(dt));
+          }
         });
         processosSnap.docs.forEach(doc => {
           const a = doc.data().ano;
-          if (a && !isNaN(Number(a))) yearsSet.add(Number(a));
+          if (a && !isNaN(Number(a))) {
+            yearsSet.add(Number(a));
+          } else {
+            const dt = doc.data().dataSolicitacao || doc.data().dataAbertura || doc.data().createdAt;
+            if (dt) yearsSet.add(getAnoDe(dt));
+          }
         });
 
         const sortedYears = Array.from(yearsSet).filter(y => y >= 1990 && y <= 2050).sort((a, b) => b - a);
@@ -154,12 +173,6 @@ export default function Relatorios() {
         if (filters.tipo) q = query(q, where('tipo', '==', filters.tipo));
       } else if (filters.module === 'negociacoes') {
         if (filters.status) q = query(q, where('status', '==', filters.status));
-      } else if (filters.module === 'oficios') {
-        if (filters.ano) q = query(q, where('ano', '==', Number(filters.ano)));
-        if (filters.tipo) q = query(q, where('tipo', '==', filters.tipo));
-      } else if (filters.module === 'processos') {
-        if (filters.status) q = query(q, where('status', '==', filters.status));
-        if (filters.tipo) q = query(q, where('tipo', '==', filters.tipo));
       }
 
       const snapshot = await getDocs(q);
@@ -206,6 +219,52 @@ export default function Relatorios() {
         }
       }
 
+      // Tratamento específico: OFÍCIOS
+      if (filters.module === 'oficios') {
+        if (filters.status) {
+          results = results.filter((item: any) => {
+            const raw = String(item.status || '').toLowerCase();
+            return raw.includes(filters.status!.toLowerCase());
+          });
+        }
+        if (filters.tipo) {
+          results = results.filter((item: any) => {
+            const rawTipo = normalizarTipoOficio(item.tipoOficio || item.tipo);
+            return rawTipo.toLowerCase().includes(filters.tipo!.toLowerCase());
+          });
+        }
+        // Ordenação decrescente por sequencial no ano
+        results.sort((a: any, b: any) => {
+          const sA = extrairSeqAno(a.numero);
+          const sB = extrairSeqAno(b.numero);
+          if (sB.ano !== sA.ano) return sB.ano - sA.ano;
+          return sB.seq - sA.seq;
+        });
+      }
+
+      // Tratamento específico: PROCESSOS
+      if (filters.module === 'processos') {
+        if (filters.status) {
+          results = results.filter((item: any) => {
+            const normSt = normalizarStatusProcesso(item.status);
+            return normSt.toLowerCase() === filters.status!.toLowerCase();
+          });
+        }
+        if (filters.tipo) {
+          results = results.filter((item: any) => {
+            const normTp = normalizarTipoSolicitacao(item.solicitacao || item.descricao);
+            return normTp.toLowerCase().includes(filters.tipo!.toLowerCase());
+          });
+        }
+        // Ordenação decrescente por sequencial no ano
+        results.sort((a: any, b: any) => {
+          const sA = extrairSeqAno(a.numero);
+          const sB = extrairSeqAno(b.numero);
+          if (sB.ano !== sA.ano) return sB.ano - sA.ano;
+          return sB.seq - sA.seq;
+        });
+      }
+
       setData(results);
       setGenerated(true);
     } catch (err) {
@@ -216,12 +275,24 @@ export default function Relatorios() {
     }
   };
 
+  const getTituloRelatorio = () => {
+    const anoTxt = filters.ano ? ` ${filters.ano}` : ' (Todos os Anos)';
+    switch (filters.module) {
+      case 'oficios': return `Relatório de Ofícios Expedidos${anoTxt}`;
+      case 'processos': return `Relatório de Processos${anoTxt}`;
+      case 'debitos': return `Relatório de Débitos${anoTxt}`;
+      case 'notificacoes': return `Relatório de Notificações${anoTxt}`;
+      case 'negociacoes': return `Relatório de Negociações${anoTxt}`;
+      default: return `Relatório${anoTxt}`;
+    }
+  };
+
   const exportToExcel = () => {
     if (data.length === 0) return;
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Relatorio");
-    XLSX.writeFile(wb, `Relatorio_${filters.module}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(wb, `Relatorio_${filters.module}_${filters.ano || 'geral'}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const exportToPdf = () => {
@@ -230,7 +301,8 @@ export default function Relatorios() {
     const tableColumn = Object.keys(data[0]).filter(k => k !== 'id');
     const tableRows = data.map(item => tableColumn.map(col => item[col]?.toString() || ''));
 
-    doc.text(`Relatório de ${filters.module.toUpperCase()}`, 14, 15);
+    const titulo = getTituloRelatorio();
+    doc.text(titulo, 14, 15);
     doc.setFontSize(10);
     doc.text(`Gerado em: ${new Date().toLocaleString()}`, 14, 22);
 
@@ -242,7 +314,7 @@ export default function Relatorios() {
       headStyles: { fillColor: [30, 58, 138] }
     });
 
-    doc.save(`Relatorio_${filters.module}_${new Date().toISOString().split('T')[0]}.pdf`);
+    doc.save(`Relatorio_${filters.module}_${filters.ano || 'geral'}_${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const totals = {
@@ -342,7 +414,81 @@ export default function Relatorios() {
                 </>
               )}
 
-              {(filters.module === 'notificacoes' || filters.module === 'processos' || filters.module === 'oficios') && (
+              {filters.module === 'oficios' && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Status / Situação</label>
+                    <select 
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy"
+                      value={filters.status || ''}
+                      onChange={(e) => setFilters({...filters, status: e.target.value})}
+                    >
+                      <option value="">Todos os status</option>
+                      <option value="Enviado">Enviado</option>
+                      <option value="Aguardando Envio">Aguardando Envio</option>
+                      <option value="Pendente">Pendente</option>
+                      <option value="Cancelado">Cancelado</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Ofício</label>
+                    <select 
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy"
+                      value={filters.tipo || ''}
+                      onChange={(e) => setFilters({...filters, tipo: e.target.value})}
+                    >
+                      <option value="">Todos os tipos</option>
+                      <option value="Presidente">Presidente</option>
+                      <option value="Administrativo">Administrativo</option>
+                      <option value="Circular">Circular</option>
+                      <option value="Externo">Externo</option>
+                      <option value="Interno">Interno</option>
+                      <option value="Gabinete">Gabinete</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {filters.module === 'processos' && (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Status / Deliberação</label>
+                    <select 
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy"
+                      value={filters.status || ''}
+                      onChange={(e) => setFilters({...filters, status: e.target.value})}
+                    >
+                      <option value="">Todos os status</option>
+                      <option value="Deferido">Deferido</option>
+                      <option value="Indeferido">Indeferido</option>
+                      <option value="Aguardando Plenária">Aguardando Plenária</option>
+                      <option value="Em Análise">Em Análise</option>
+                      <option value="Pendente">Pendente</option>
+                      <option value="Ad Referendum">Ad Referendum</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Solicitação</label>
+                    <select 
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy"
+                      value={filters.tipo || ''}
+                      onChange={(e) => setFilters({...filters, tipo: e.target.value})}
+                    >
+                      <option value="">Todas as solicitações</option>
+                      <option value="Registro Definitivo">Registro Definitivo</option>
+                      <option value="Registro Provisório">Registro Provisório</option>
+                      <option value="Cancelamento de Registro">Cancelamento de Registro</option>
+                      <option value="Licença de 2 anos">Licença de 2 anos</option>
+                      <option value="Transferência">Transferência</option>
+                      <option value="Segunda Via">Segunda Via</option>
+                      <option value="Reinscrição">Reinscrição</option>
+                      <option value="Certidão">Certidão</option>
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {(filters.module === 'notificacoes' || filters.module === 'negociacoes') && (
                 <>
                   <div className="space-y-2">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Status / Situação</label>
@@ -359,11 +505,11 @@ export default function Relatorios() {
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Documento</label>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Filtro Adicional</label>
                     <input 
                       type="text" 
                       className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-blue outline-none transition-all font-bold text-crb-navy"
-                      placeholder="Filtrar por tipo..."
+                      placeholder="Filtrar por tipo ou texto..."
                       value={filters.tipo || ''}
                       onChange={(e) => setFilters({...filters, tipo: e.target.value})}
                     />
@@ -410,31 +556,62 @@ export default function Relatorios() {
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
+            className="space-y-8"
           >
-            {/* Totals Banner */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-6">
-                <div className="p-4 bg-slate-100 rounded-2xl text-crb-navy">
-                  <Database size={24} />
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total de Registros</p>
-                  <p className="text-3xl font-serif font-black text-crb-navy">{totals.count}</p>
-                </div>
+            {/* Título Oficial do Relatório com Ano */}
+            <div className="bg-slate-900 text-white p-6 rounded-3xl shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <span className="text-[10px] font-bold text-crb-purple-light uppercase tracking-widest block">
+                  Documento Analítico
+                </span>
+                <h3 className="text-2xl font-serif font-bold text-white mt-1">
+                  {getTituloRelatorio()}
+                </h3>
+                <p className="text-xs text-slate-300 font-medium mt-1">
+                  Total de {totals.count} registros localizados para os parâmetros informados.
+                </p>
               </div>
-              {filters.module === 'debitos' && (
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1.5 rounded-xl bg-white/10 text-white text-xs font-mono font-bold">
+                  {filters.ano ? `Ano Base: ${filters.ano}` : 'Geral (Todos os Anos)'}
+                </span>
+              </div>
+            </div>
+
+            {/* Painel Analítico Geral Automático */}
+            {filters.module === 'oficios' && (
+              <OficiosSummaryPanel oficios={data} anoSelecionado={filters.ano} />
+            )}
+
+            {filters.module === 'processos' && (
+              <ProcessosSummaryPanel processos={data} anoSelecionado={filters.ano} />
+            )}
+
+            {/* Totals Banner para outros módulos (ex: Débitos, Notificações) */}
+            {filters.module !== 'oficios' && filters.module !== 'processos' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-6">
-                  <div className="p-4 bg-emerald-50 rounded-2xl text-emerald-600">
-                    <TrendingUp size={24} />
+                  <div className="p-4 bg-slate-100 rounded-2xl text-crb-navy">
+                    <Database size={24} />
                   </div>
                   <div>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Valor Total Consolidado</p>
-                    <p className="text-3xl font-serif font-black text-crb-navy">{formatCurrency(totals.value)}</p>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total de Registros</p>
+                    <p className="text-3xl font-serif font-black text-crb-navy">{totals.count}</p>
                   </div>
                 </div>
-              )}
-            </div>
+                {filters.module === 'debitos' && (
+                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center gap-6">
+                    <div className="p-4 bg-emerald-50 rounded-2xl text-emerald-600">
+                      <TrendingUp size={24} />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Valor Total Consolidado</p>
+                      <p className="text-3xl font-serif font-black text-crb-navy">{formatCurrency(totals.value)}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Results Table */}
             <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">

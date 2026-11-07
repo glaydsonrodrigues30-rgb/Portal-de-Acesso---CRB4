@@ -1,14 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
   query, 
   getDocs, 
-  addDoc, 
   doc, 
   updateDoc, 
   deleteDoc,
-  orderBy, 
-  where 
+  setDoc,
+  orderBy
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, logAuditoria } from '../lib/firebase';
 import { Processo } from '@/src/types';
@@ -17,19 +16,29 @@ import {
   FolderOpen, 
   Search, 
   Calendar, 
-  FileText, 
-  User, 
-  ChevronRight, 
-  Edit2, 
   X, 
   Save, 
+  Edit2, 
   Trash2, 
   Eye,
-  Settings
+  RefreshCw,
+  Sparkles,
+  Layers,
+  Filter
 } from 'lucide-react';
 import { formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  getAnoDe, 
+  proximoNumero, 
+  extrairSeqAno, 
+  existeNumeroNoAno, 
+  normalizarStatusProcesso,
+  normalizarTipoSolicitacao
+} from '../lib/numeracao';
+
+const CURRENT_YEAR = new Date().getFullYear();
 
 export default function Processos() {
   const { userData, isAdmin, isOperacional } = useAuth();
@@ -38,9 +47,12 @@ export default function Processos() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchStatus, setSearchStatus] = useState('');
-  const [searchAno, setSearchAno] = useState('');
+  
+  // B) Seletor de Ano com padrão no ano atual
+  const [searchAno, setSearchAno] = useState<string>(CURRENT_YEAR.toString());
   
   const [editingProcesso, setEditingProcesso] = useState<Partial<Processo> | null>(null);
+  const [isNumeroManual, setIsNumeroManual] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -107,26 +119,102 @@ export default function Processos() {
 
   useEffect(() => { fetchProcessos(); }, []);
 
+  // Anos disponíveis dinamicamente
+  const availableYears = useMemo(() => {
+    const set = new Set<number>();
+    set.add(CURRENT_YEAR);
+    processos.forEach(p => {
+      const a = p.ano || getAnoDe(p.dataSolicitacao || p.dataAbertura);
+      if (a) set.add(a);
+    });
+    return Array.from(set).sort((a, b) => b - a);
+  }, [processos]);
+
+  // Abertura do formulário de Novo Processo com preenchimento automático
+  const handleOpenNovoProcesso = () => {
+    const anoAtual = CURRENT_YEAR;
+    const prox = proximoNumero(processos, anoAtual);
+    const dataPadrao = new Date().toISOString();
+
+    setEditingProcesso({
+      status: 'Em Análise',
+      dataSolicitacao: dataPadrao,
+      dataAbertura: dataPadrao,
+      ano: anoAtual,
+      numeroProcesso: prox,
+      numero: prox
+    });
+    setIsNumeroManual(false);
+    setIsReadOnly(false);
+    setIsModalOpen(true);
+  };
+
+  // Re-geração automática do número sugerido
+  const handleGerarNumeroAutomatico = () => {
+    const docDate = editingProcesso?.dataSolicitacao || editingProcesso?.dataAbertura;
+    const ano = getAnoDe(docDate);
+    const sugerido = proximoNumero(processos, ano);
+    setEditingProcesso(prev => prev ? ({
+      ...prev,
+      numeroProcesso: sugerido,
+      numero: sugerido,
+      ano
+    }) : prev);
+    setIsNumeroManual(false);
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProcesso || isReadOnly) return;
+
+    const numLimpo = (editingProcesso.numeroProcesso || editingProcesso.numero || '').trim();
+    if (!numLimpo) {
+      alert('Por favor, informe o número do processo.');
+      return;
+    }
+
+    const formAno = getAnoDe(editingProcesso.dataSolicitacao || editingProcesso.dataAbertura);
+
+    // Validação de unicidade no mesmo ano
+    if (existeNumeroNoAno(processos, numLimpo, formAno, editingProcesso.id)) {
+      const proxLivre = proximoNumero(processos, formAno);
+      alert(`Número já utilizado em ${formAno}. Próximo disponível: ${proxLivre}`);
+      return;
+    }
+
     setSaving(true);
     try {
-      const payload = {
+      const solNorm = normalizarTipoSolicitacao(editingProcesso.solicitacao || editingProcesso.descricao);
+      const stNorm = normalizarStatusProcesso(editingProcesso.status);
+
+      const payload: any = {
         ...editingProcesso,
+        numero: numLimpo,
+        numeroProcesso: numLimpo,
+        solicitacao: solNorm,
+        descricao: solNorm,
+        status: stNorm,
+        ano: formAno,
         updatedAt: new Date().toISOString(),
-        createdAt: editingProcesso.id ? undefined : new Date().toISOString()
+        createdAt: editingProcesso.id ? (editingProcesso.createdAt || new Date().toISOString()) : new Date().toISOString()
       };
-      
+
       if (editingProcesso.id) {
         await updateDoc(doc(db, 'processos', editingProcesso.id), payload);
         await logAuditoria('EDICAO', 'PROCESSOS', editingProcesso.id);
         alert('Processo atualizado com sucesso.');
       } else {
-        const docRef = await addDoc(collection(db, 'processos'), payload);
-        await logAuditoria('CRIACAO', 'PROCESSOS', docRef.id);
+        // Chave natural determinística prc_NNN_AAAA
+        const parsed = extrairSeqAno(numLimpo);
+        const seqStr = parsed ? String(parsed.seq).padStart(3, '0') : numLimpo.replace(/[^a-zA-Z0-9]/g, '_');
+        const chaveNatural = `prc_${seqStr}_${formAno}`;
+
+        payload.id = chaveNatural;
+        await setDoc(doc(db, 'processos', chaveNatural), payload, { merge: true });
+        await logAuditoria('CRIACAO', 'PROCESSOS', chaveNatural);
         alert('Processo registrado com sucesso.');
       }
+
       setIsModalOpen(false);
       fetchProcessos();
     } catch (err) {
@@ -150,31 +238,55 @@ export default function Processos() {
     }
   };
 
-  const filteredProcessos = processos.filter(p => {
-    const search = searchTerm.toLowerCase();
-    const matchesProfessional = (p.profissional || p.interessado)?.toLowerCase().includes(search);
-    const matchesNum = (p.numeroProcesso || p.numero)?.toLowerCase().includes(search);
-    const matchesRequest = (p.solicitacao || p.descricao)?.toLowerCase().includes(search);
-    const matchesStatus = searchStatus ? p.status === searchStatus : true;
-    const matchesAno = searchAno ? (p.dataSolicitacao?.startsWith(searchAno) || p.dataAbertura?.startsWith(searchAno) || p.ano?.toString() === searchAno) : true;
-    return (matchesProfessional || matchesNum || matchesRequest) && matchesStatus && matchesAno;
-  });
+  // Filtragem e ordenação decrescente por número dentro do ano
+  const filteredProcessos = useMemo(() => {
+    return processos.filter(p => {
+      const search = searchTerm.toLowerCase();
+      const matchesProfessional = (p.profissional || p.interessado)?.toLowerCase().includes(search);
+      const matchesNum = (p.numeroProcesso || p.numero)?.toLowerCase().includes(search);
+      const matchesRequest = (p.solicitacao || p.descricao)?.toLowerCase().includes(search);
+
+      // Filtro de ano
+      let matchesAno = true;
+      if (searchAno && searchAno !== 'TODOS') {
+        const itemAno = p.ano || extrairSeqAno(p.numeroProcesso || p.numero)?.ano || getAnoDe(p.dataSolicitacao || p.dataAbertura);
+        matchesAno = itemAno.toString() === searchAno;
+      }
+
+      let matchesStatus = true;
+      if (searchStatus) {
+        matchesStatus = normalizarStatusProcesso(p.status) === searchStatus;
+      }
+
+      return (matchesProfessional || matchesNum || matchesRequest) && matchesStatus && matchesAno;
+    }).sort((a, b) => {
+      // Ordenação decrescente por número dentro do ano
+      const seqA = extrairSeqAno(a.numeroProcesso || a.numero)?.seq || 0;
+      const seqB = extrairSeqAno(b.numeroProcesso || b.numero)?.seq || 0;
+      if (seqB !== seqA) return seqB - seqA;
+
+      const dateA = new Date(a.dataSolicitacao || a.dataAbertura || 0).getTime();
+      const dateB = new Date(b.dataSolicitacao || b.dataAbertura || 0).getTime();
+      return dateB - dateA;
+    });
+  }, [processos, searchTerm, searchAno, searchStatus]);
+
+  const formAnoAtual = getAnoDe(editingProcesso?.dataSolicitacao || editingProcesso?.dataAbertura);
+  const proximoSugestao = proximoNumero(processos, formAnoAtual);
 
   return (
     <div className="space-y-8 text-sans">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-l-4 border-crb-purple pl-6">
         <div>
           <h2 className="text-3xl font-serif font-bold text-crb-navy">Processos</h2>
-          <p className="text-slate-500 font-medium font-sans">Gestão de solicitações e registros administrativos para plenária.</p>
+          <p className="text-slate-500 font-medium font-sans">
+            Gestão de solicitações e registros administrativos para plenária ({searchAno === 'TODOS' || !searchAno ? 'Todos os Anos' : `Exercício ${searchAno}`}).
+          </p>
         </div>
         {(isAdmin || isOperacional) && (
           <button 
-            onClick={() => { 
-              setEditingProcesso({ status: 'Em Análise' }); 
-              setIsReadOnly(false);
-              setIsModalOpen(true); 
-            }}
-            className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide"
+            onClick={handleOpenNovoProcesso}
+            className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide cursor-pointer"
           >
             <Plus size={20} className="text-white" />
             Novo Processo
@@ -182,9 +294,10 @@ export default function Processos() {
         )}
       </div>
 
+      {/* Barra de Filtros */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="relative group col-span-1 md:col-span-1">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="relative group col-span-1 md:col-span-2">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-crb-navy transition-colors" size={20} />
             <input 
               type="text" 
@@ -194,30 +307,43 @@ export default function Processos() {
               className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-crb-purple focus:border-crb-navy outline-none transition-all placeholder:text-slate-400 font-medium"
             />
           </div>
-          <div className="flex gap-4 col-span-1 md:col-span-2">
+
+          {/* B) Seletor de Ano */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Ano</label>
+            <select 
+              value={searchAno}
+              onChange={(e) => setSearchAno(e.target.value)}
+              className="px-4 py-2.5 border-2 border-slate-100 rounded-xl outline-none focus:border-crb-purple font-bold text-sm text-crb-navy bg-white transition-all cursor-pointer"
+            >
+              <option value="TODOS">Todos os anos</option>
+              {availableYears.map(y => (
+                <option key={y} value={y.toString()}>{y}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Status</label>
             <select 
               value={searchStatus}
               onChange={(e) => setSearchStatus(e.target.value)}
-              className="px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-crb-purple font-bold text-sm text-crb-navy min-w-[160px]"
+              className="px-4 py-2.5 border-2 border-slate-100 rounded-xl outline-none focus:border-crb-purple font-bold text-sm text-crb-navy bg-white transition-all cursor-pointer"
             >
               <option value="">Todos os Status</option>
               <option value="Em Análise">Em Análise</option>
               <option value="Deferido">Deferido</option>
               <option value="Indeferido">Indeferido</option>
-              <option value="Sobrestado">Sobrestado</option>
+              <option value="Aguardando Plenária">Aguardando Plenária</option>
+              <option value="Ad Referendum">Ad Referendum</option>
               <option value="Pendente">Pendente</option>
+              <option value="Sobrestado">Sobrestado</option>
             </select>
-            <input 
-              type="number" 
-              placeholder="Ano..." 
-              value={searchAno}
-              onChange={(e) => setSearchAno(e.target.value)}
-              className="px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-crb-purple font-bold text-sm text-crb-navy w-32"
-            />
           </div>
         </div>
       </div>
 
+      {/* Tabela de Processos */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -240,7 +366,9 @@ export default function Processos() {
                   </div>
                 </td></tr>
               ) : filteredProcessos.length === 0 ? (
-                <tr><td colSpan={6} className="px-8 py-20 text-center text-slate-400 font-medium font-sans italic">Nenhum processo administrativo encontrado.</td></tr>
+                <tr><td colSpan={6} className="px-8 py-20 text-center text-slate-400 font-medium font-sans italic">
+                  Nenhum processo administrativo encontrado para os filtros selecionados.
+                </td></tr>
               ) : (
                 filteredProcessos.map(p => (
                   <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
@@ -256,19 +384,25 @@ export default function Processos() {
                       <span className="text-sm font-bold text-slate-700 uppercase tracking-tight line-clamp-1 max-w-[200px]">{p.profissional || p.interessado}</span>
                     </td>
                     <td className="px-8 py-5">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-tight line-clamp-1">{p.solicitacao || p.descricao}</span>
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-tight line-clamp-1">
+                        {normalizarTipoSolicitacao(p.solicitacao || p.descricao)}
+                      </span>
                     </td>
                     <td className="px-8 py-5">
-                      <span className="text-xs font-black text-crb-navy">{p.dataPlenaria ? formatDate(p.dataPlenaria) : 'A definir'}</span>
+                      <span className="text-xs font-black text-crb-navy">
+                        {p.dataPlenaria ? formatDate(p.dataPlenaria) : (p.observacaoPlenaria ? p.observacaoPlenaria : 'A definir')}
+                      </span>
                     </td>
                     <td className="px-8 py-5">
                       <span className={cn(
                         "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border shadow-sm",
                         p.status === 'Deferido' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : 
-                        p.status === 'Em Análise' ? "bg-purple-50 text-purple-700 border-purple-100" :
-                        "bg-red-50 text-red-700 border-red-100"
+                        p.status === 'Indeferido' ? "bg-red-50 text-red-700 border-red-100" :
+                        p.status === 'Aguardando Plenária' ? "bg-blue-50 text-blue-700 border-blue-100" :
+                        p.status === 'Ad Referendum' ? "bg-violet-50 text-violet-700 border-violet-100" :
+                        "bg-purple-50 text-purple-700 border-purple-100"
                       )}>
-                        {p.status}
+                        {normalizarStatusProcesso(p.status)}
                       </span>
                     </td>
                     <td className="px-8 py-5 text-right">
@@ -277,14 +411,14 @@ export default function Processos() {
                           <>
                             <button 
                               onClick={() => { setEditingProcesso(p); setIsReadOnly(false); setIsModalOpen(true); }}
-                              className="p-2 text-crb-navy hover:text-white hover:bg-crb-navy rounded-lg transition-all border border-slate-100 shadow-xs"
+                              className="p-2 text-crb-navy hover:text-white hover:bg-crb-navy rounded-lg transition-all border border-slate-100 shadow-xs cursor-pointer"
                               title="Editar"
                             >
                               <Edit2 size={14} />
                             </button>
                             <button 
                               onClick={() => handleDelete(p.id)}
-                              className="p-2 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all border border-slate-100 shadow-xs"
+                              className="p-2 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all border border-slate-100 shadow-xs cursor-pointer"
                               title="Excluir"
                             >
                               <Trash2 size={14} />
@@ -293,7 +427,7 @@ export default function Processos() {
                         )}
                         <button 
                           onClick={() => { setEditingProcesso(p); setIsReadOnly(true); setIsModalOpen(true); }}
-                          className="p-2 text-slate-400 hover:text-white hover:bg-slate-400 rounded-lg transition-all border border-slate-100 shadow-xs"
+                          className="p-2 text-slate-400 hover:text-white hover:bg-slate-400 rounded-lg transition-all border border-slate-100 shadow-xs cursor-pointer"
                           title="Visualizar"
                         >
                           <Eye size={14} />
@@ -308,6 +442,7 @@ export default function Processos() {
         </div>
       </div>
 
+      {/* Modal de Cadastro/Edição de Processo */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-crb-navy/60 backdrop-blur-sm">
@@ -326,26 +461,57 @@ export default function Processos() {
                     {isReadOnly ? 'Visualizar Processo' : (editingProcesso?.id ? 'Editar Processo' : 'Registro de Processo Administrativo')}
                   </h3>
                 </div>
-                <button onClick={() => setIsModalOpen(false)} className="text-white/60 hover:text-white transition-colors">
+                <button onClick={() => setIsModalOpen(false)} className="text-white/60 hover:text-white transition-colors cursor-pointer">
                   <X size={24} />
                 </button>
               </div>
 
               <form onSubmit={handleSave} className="p-8 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Número do Processo</label>
-                    <input 
-                      required
-                      type="text"
-                      disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                      placeholder="000/2024"
-                      value={editingProcesso?.numeroProcesso || editingProcesso?.numero || ''}
-                      onChange={(e) => setEditingProcesso({...editingProcesso!, numeroProcesso: e.target.value})}
-                    />
+                  {/* A) Campo Número com sugestão automática, botão Gerar automático e texto de ajuda */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">
+                        Número do Processo
+                      </label>
+                      {!isReadOnly && (
+                        <button
+                          type="button"
+                          onClick={handleGerarNumeroAutomatico}
+                          className="flex items-center gap-1 text-[10px] font-bold text-crb-purple hover:text-crb-purple-dark hover:underline transition-all cursor-pointer"
+                          title="Restaurar sugestão automática do próximo sequencial livre"
+                        >
+                          <Sparkles size={11} />
+                          Gerar automático
+                        </button>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input 
+                        required
+                        type="text"
+                        disabled={isReadOnly}
+                        className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-mono font-bold text-crb-navy disabled:opacity-70"
+                        placeholder="001-2026"
+                        value={editingProcesso?.numeroProcesso || editingProcesso?.numero || ''}
+                        onChange={(e) => {
+                          setIsNumeroManual(true);
+                          setEditingProcesso({
+                            ...editingProcesso!,
+                            numeroProcesso: e.target.value,
+                            numero: e.target.value
+                          });
+                        }}
+                      />
+                    </div>
+                    {!isReadOnly && (
+                      <p className="text-[11px] text-slate-400 font-medium ml-1">
+                        Próximo disponível: <strong className="text-crb-purple font-mono">{proximoSugestao}</strong>
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome do Profissional/Empresa</label>
                     <input 
                       required
@@ -358,35 +524,39 @@ export default function Processos() {
                     />
                   </div>
 
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Solicitação</label>
                     <input 
                       required
                       type="text"
                       disabled={isReadOnly}
                       className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy uppercase disabled:opacity-70"
-                      placeholder="EX: BAIXA DE RESPONSÁVEL TÉCNICO"
+                      placeholder="EX: LICENÇA DE 2 ANOS / REGISTRO DEFINITIVO"
                       value={editingProcesso?.solicitacao || editingProcesso?.descricao || ''}
                       onChange={(e) => setEditingProcesso({...editingProcesso!, solicitacao: e.target.value})}
                     />
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Status do Processo</label>
                     <select 
                       disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70 cursor-pointer"
                       value={editingProcesso?.status || 'Em Análise'}
                       onChange={(e) => setEditingProcesso({...editingProcesso!, status: e.target.value as any})}
                     >
                       <option value="Em Análise">Em Análise</option>
                       <option value="Deferido">Deferido</option>
                       <option value="Indeferido">Indeferido</option>
+                      <option value="Aguardando Plenária">Aguardando Plenária</option>
+                      <option value="Ad Referendum">Ad Referendum</option>
                       <option value="Sobrestado">Sobrestado</option>
                       <option value="Pendente">Pendente</option>
                     </select>
                   </div>
 
-                  <div className="space-y-2">
+                  {/* Data da Solicitação com recálculo do número sugerido caso não editado manualmente */}
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Data da Solicitação</label>
                     <input 
                       required
@@ -396,11 +566,29 @@ export default function Processos() {
                       value={editingProcesso?.dataSolicitacao?.split('T')[0] || editingProcesso?.dataAbertura?.split('T')[0] || ''}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setEditingProcesso({...editingProcesso!, dataSolicitacao: val ? new Date(val).toISOString() : ''});
+                        const novoAno = getAnoDe(val);
+                        const isoStr = val ? new Date(val).toISOString() : '';
+
+                        setEditingProcesso(prev => {
+                          if (!prev) return prev;
+                          const numAtualizado = (!isNumeroManual && !prev.id)
+                            ? proximoNumero(processos, novoAno)
+                            : prev.numeroProcesso;
+
+                          return {
+                            ...prev,
+                            dataSolicitacao: isoStr,
+                            dataAbertura: isoStr,
+                            ano: novoAno,
+                            numeroProcesso: numAtualizado,
+                            numero: numAtualizado
+                          };
+                        });
                       }}
                     />
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Data da Plenária</label>
                     <input 
                       type="date"
@@ -459,7 +647,7 @@ export default function Processos() {
                             <button
                               type="button"
                               onClick={() => openAttachment(file)}
-                              className="p-1.5 text-slate-500 hover:text-white hover:bg-crb-navy rounded-lg transition-all"
+                              className="p-1.5 text-slate-500 hover:text-white hover:bg-crb-navy rounded-lg transition-all cursor-pointer"
                               title="Visualizar documento"
                             >
                               <Eye size={14} />
@@ -468,7 +656,7 @@ export default function Processos() {
                               <button
                                 type="button"
                                 onClick={() => removeProcessoAnexo(file.id)}
-                                className="p-1.5 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all"
+                                className="p-1.5 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all cursor-pointer"
                                 title="Excluir documento"
                               >
                                 <Trash2 size={14} />
@@ -487,7 +675,7 @@ export default function Processos() {
                   <button 
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="flex-1 px-6 py-4 border-2 border-slate-100 text-slate-400 font-bold rounded-2xl hover:bg-slate-50 transition-all uppercase tracking-widest text-xs font-sans"
+                    className="flex-1 px-6 py-4 border-2 border-slate-100 text-slate-400 font-bold rounded-2xl hover:bg-slate-50 transition-all uppercase tracking-widest text-xs font-sans cursor-pointer"
                   >
                     {isReadOnly ? 'Fechar' : 'Voltar'}
                   </button>
@@ -495,7 +683,7 @@ export default function Processos() {
                     <button 
                       type="submit"
                       disabled={saving}
-                      className="flex-1 flex items-center justify-center gap-2 bg-crb-purple text-white px-6 py-4 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold uppercase tracking-widest text-xs disabled:opacity-50"
+                      className="flex-1 flex items-center justify-center gap-2 bg-crb-purple text-white px-6 py-4 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold uppercase tracking-widest text-xs disabled:opacity-50 cursor-pointer"
                     >
                       {saving ? (
                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

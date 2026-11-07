@@ -1,14 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   collection, 
   query, 
   getDocs, 
-  addDoc, 
   doc, 
   updateDoc, 
   deleteDoc,
-  orderBy, 
-  where 
+  setDoc,
+  orderBy
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, logAuditoria } from '../lib/firebase';
 import { Oficio } from '@/src/types';
@@ -17,18 +16,28 @@ import {
   FileText, 
   Search, 
   Calendar, 
-  Hash, 
-  UserCircle, 
   X, 
   Save, 
   Edit2, 
   Trash2, 
   Eye,
-  Settings
+  RefreshCw,
+  Sparkles,
+  Layers,
+  Filter
 } from 'lucide-react';
 import { formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
+import { 
+  getAnoDe, 
+  proximoNumero, 
+  extrairSeqAno, 
+  existeNumeroNoAno, 
+  normalizarTipoOficio 
+} from '../lib/numeracao';
+
+const CURRENT_YEAR = new Date().getFullYear();
 
 export default function Oficios() {
   const { userData, isAdmin, isOperacional } = useAuth();
@@ -36,10 +45,13 @@ export default function Oficios() {
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [searchAno, setSearchAno] = useState('');
+  
+  // B) Seletor de Ano com padrão no ano atual
+  const [searchAno, setSearchAno] = useState<string>(CURRENT_YEAR.toString());
   const [searchTipo, setSearchTipo] = useState('');
   
   const [editingOficio, setEditingOficio] = useState<Partial<Oficio> | null>(null);
+  const [isNumeroManual, setIsNumeroManual] = useState(false);
   const [isReadOnly, setIsReadOnly] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -106,26 +118,112 @@ export default function Oficios() {
 
   useEffect(() => { fetchOficios(); }, []);
 
+  // Lista dinâmica de anos a partir dos dados existentes
+  const availableYears = useMemo(() => {
+    const set = new Set<number>();
+    set.add(CURRENT_YEAR);
+    oficios.forEach(o => {
+      const a = o.ano || getAnoDe(o.dataEnvio || o.dataEmissao);
+      if (a) set.add(a);
+    });
+    return Array.from(set).sort((a, b) => b - a);
+  }, [oficios]);
+
+  // Lista dinâmica de tipos de ofício
+  const availableTipos = useMemo(() => {
+    const set = new Set<string>(['Circular', 'Presidente', 'Administrativo', 'Gabinete', 'Interno', 'Externo']);
+    oficios.forEach(o => {
+      const t = o.tipoOficio || o.tipo;
+      if (t) set.add(normalizarTipoOficio(t));
+    });
+    return Array.from(set).sort();
+  }, [oficios]);
+
+  // Abertura do formulário de Novo Ofício com preenchimento automático
+  const handleOpenNovoOficio = () => {
+    const anoAtual = CURRENT_YEAR;
+    const prox = proximoNumero(oficios, anoAtual);
+    const dataPadrao = new Date().toISOString();
+
+    setEditingOficio({
+      status: 'Aguardando Envio',
+      tipoOficio: 'Circular',
+      tipo: 'Circular',
+      dataEnvio: dataPadrao,
+      dataEmissao: dataPadrao,
+      ano: anoAtual,
+      numeroOficio: prox,
+      numero: prox
+    });
+    setIsNumeroManual(false);
+    setIsReadOnly(false);
+    setIsModalOpen(true);
+  };
+
+  // Re-geração automática do número sugerido
+  const handleGerarNumeroAutomatico = () => {
+    const docDate = editingOficio?.dataEnvio || editingOficio?.dataEmissao;
+    const ano = getAnoDe(docDate);
+    const sugerido = proximoNumero(oficios, ano);
+    setEditingOficio(prev => prev ? ({
+      ...prev,
+      numeroOficio: sugerido,
+      numero: sugerido,
+      ano
+    }) : prev);
+    setIsNumeroManual(false);
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingOficio || isReadOnly) return;
+
+    const numLimpo = (editingOficio.numeroOficio || editingOficio.numero || '').trim();
+    if (!numLimpo) {
+      alert('Por favor, informe o número do ofício.');
+      return;
+    }
+
+    const formAno = getAnoDe(editingOficio.dataEnvio || editingOficio.dataEmissao);
+
+    // Validação de unicidade no mesmo ano
+    if (existeNumeroNoAno(oficios, numLimpo, formAno, editingOficio.id)) {
+      const proxLivre = proximoNumero(oficios, formAno);
+      alert(`Número já utilizado em ${formAno}. Próximo disponível: ${proxLivre}`);
+      return;
+    }
+
     setSaving(true);
     try {
-      const payload = {
-        ...editingOficio,
-        updatedAt: new Date().toISOString(),
-        createdAt: editingOficio.id ? undefined : new Date().toISOString()
-      };
+      const tipoFinal = normalizarTipoOficio(editingOficio.tipoOficio || editingOficio.tipo || 'Circular');
       
+      const payload: any = {
+        ...editingOficio,
+        numero: numLimpo,
+        numeroOficio: numLimpo,
+        tipo: tipoFinal,
+        tipoOficio: tipoFinal,
+        ano: formAno,
+        updatedAt: new Date().toISOString(),
+        createdAt: editingOficio.id ? (editingOficio.createdAt || new Date().toISOString()) : new Date().toISOString()
+      };
+
       if (editingOficio.id) {
         await updateDoc(doc(db, 'oficios', editingOficio.id), payload);
         await logAuditoria('EDICAO', 'OFICIOS', editingOficio.id);
         alert('Ofício atualizado com sucesso.');
       } else {
-        const docRef = await addDoc(collection(db, 'oficios'), payload);
-        await logAuditoria('CRIACAO', 'OFICIOS', docRef.id);
+        // Chave natural determinística ofi_NNN_AAAA
+        const parsed = extrairSeqAno(numLimpo);
+        const seqStr = parsed ? String(parsed.seq).padStart(3, '0') : numLimpo.replace(/[^a-zA-Z0-9]/g, '_');
+        const chaveNatural = `ofi_${seqStr}_${formAno}`;
+
+        payload.id = chaveNatural;
+        await setDoc(doc(db, 'oficios', chaveNatural), payload, { merge: true });
+        await logAuditoria('CRIACAO', 'OFICIOS', chaveNatural);
         alert('Ofício cadastrado com sucesso.');
       }
+
       setIsModalOpen(false);
       fetchOficios();
     } catch (err) {
@@ -149,31 +247,57 @@ export default function Oficios() {
     }
   };
 
-  const filteredOficios = oficios.filter(o => {
-    const search = searchTerm.toLowerCase();
-    const matchesSubject = o.assunto?.toLowerCase().includes(search);
-    const matchesDest = o.destinatario?.toLowerCase().includes(search);
-    const matchesNum = (o.numeroOficio || o.numero)?.toLowerCase().includes(search);
-    const matchesAno = searchAno ? (o.dataEnvio?.startsWith(searchAno) || o.ano?.toString() === searchAno) : true;
-    const matchesTipo = searchTipo ? o.tipoOficio === searchTipo : true;
-    return (matchesSubject || matchesDest || matchesNum) && matchesAno && matchesTipo;
-  });
+  // Filtragem e ordenação decrescente por número dentro do ano
+  const filteredOficios = useMemo(() => {
+    return oficios.filter(o => {
+      const search = searchTerm.toLowerCase();
+      const matchesSubject = o.assunto?.toLowerCase().includes(search);
+      const matchesDest = o.destinatario?.toLowerCase().includes(search);
+      const matchesNum = (o.numeroOficio || o.numero)?.toLowerCase().includes(search);
+
+      // Filtro de ano estrito
+      let matchesAno = true;
+      if (searchAno && searchAno !== 'TODOS') {
+        const itemAno = o.ano || extrairSeqAno(o.numeroOficio || o.numero)?.ano || getAnoDe(o.dataEnvio || o.dataEmissao);
+        matchesAno = itemAno.toString() === searchAno;
+      }
+
+      // Filtro de tipo normalizado
+      let matchesTipo = true;
+      if (searchTipo) {
+        const itemTipo = normalizarTipoOficio(o.tipoOficio || o.tipo);
+        matchesTipo = itemTipo === searchTipo;
+      }
+
+      return (matchesSubject || matchesDest || matchesNum) && matchesAno && matchesTipo;
+    }).sort((a, b) => {
+      // Ordenação decrescente por número dentro do ano
+      const seqA = extrairSeqAno(a.numeroOficio || a.numero)?.seq || 0;
+      const seqB = extrairSeqAno(b.numeroOficio || b.numero)?.seq || 0;
+      if (seqB !== seqA) return seqB - seqA;
+
+      const dateA = new Date(a.dataEnvio || a.dataEmissao || 0).getTime();
+      const dateB = new Date(b.dataEnvio || b.dataEmissao || 0).getTime();
+      return dateB - dateA;
+    });
+  }, [oficios, searchTerm, searchAno, searchTipo]);
+
+  const formAnoAtual = getAnoDe(editingOficio?.dataEnvio || editingOficio?.dataEmissao);
+  const proximoSugestao = proximoNumero(oficios, formAnoAtual);
 
   return (
     <div className="space-y-8 text-sans">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-l-4 border-crb-purple pl-6">
         <div>
           <h2 className="text-3xl font-serif font-bold text-crb-navy">Ofícios Expedidos</h2>
-          <p className="text-slate-500 font-medium font-sans">Controle de correspondências oficiais enviadas.</p>
+          <p className="text-slate-500 font-medium font-sans">
+            Controle de correspondências oficiais enviadas ({searchAno === 'TODOS' || !searchAno ? 'Todos os Anos' : `Exercício ${searchAno}`}).
+          </p>
         </div>
         {(isAdmin || isOperacional) && (
           <button 
-            onClick={() => { 
-              setEditingOficio({ status: 'Aguardando Envio', tipoOficio: 'Circular' }); 
-              setIsReadOnly(false);
-              setIsModalOpen(true); 
-            }}
-            className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide"
+            onClick={handleOpenNovoOficio}
+            className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide cursor-pointer"
           >
             <Plus size={20} className="text-white" />
             Novo Ofício
@@ -181,9 +305,10 @@ export default function Oficios() {
         )}
       </div>
 
+      {/* Barra de Filtros */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="relative group col-span-1 md:col-span-1">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="relative group col-span-1 md:col-span-2">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-crb-navy transition-colors" size={20} />
             <input 
               type="text" 
@@ -193,29 +318,40 @@ export default function Oficios() {
               className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-crb-purple focus:border-crb-navy outline-none transition-all placeholder:text-slate-400 font-medium"
             />
           </div>
-          <div className="flex gap-4 col-span-1 md:col-span-2">
+
+          {/* B) Seletor de Ano */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Ano</label>
+            <select 
+              value={searchAno}
+              onChange={(e) => setSearchAno(e.target.value)}
+              className="px-4 py-2.5 border-2 border-slate-100 rounded-xl outline-none focus:border-crb-purple font-bold text-sm text-crb-navy bg-white transition-all cursor-pointer"
+            >
+              <option value="TODOS">Todos os anos</option>
+              {availableYears.map(y => (
+                <option key={y} value={y.toString()}>{y}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Seletor de Tipo com tipos dinâmicos */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Ofício</label>
             <select 
               value={searchTipo}
               onChange={(e) => setSearchTipo(e.target.value)}
-              className="px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-crb-purple font-bold text-sm text-crb-navy min-w-[160px]"
+              className="px-4 py-2.5 border-2 border-slate-100 rounded-xl outline-none focus:border-crb-purple font-bold text-sm text-crb-navy bg-white transition-all cursor-pointer"
             >
               <option value="">Todos os Tipos</option>
-              <option value="Circular">Circular</option>
-              <option value="Interno">Interno</option>
-              <option value="Externo">Externo</option>
-              <option value="Gabinete">Gabinete</option>
+              {availableTipos.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
             </select>
-            <input 
-              type="number" 
-              placeholder="Ano..." 
-              value={searchAno}
-              onChange={(e) => setSearchAno(e.target.value)}
-              className="px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-crb-purple font-bold text-sm text-crb-navy w-32"
-            />
           </div>
         </div>
       </div>
 
+      {/* Tabela de Ofícios */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -239,7 +375,9 @@ export default function Oficios() {
                   </div>
                 </td></tr>
               ) : filteredOficios.length === 0 ? (
-                <tr><td colSpan={7} className="px-8 py-20 text-center text-slate-400 font-medium font-sans italic">Nenhum ofício encontrado.</td></tr>
+                <tr><td colSpan={7} className="px-8 py-20 text-center text-slate-400 font-medium font-sans italic">
+                  Nenhum ofício encontrado para os filtros selecionados.
+                </td></tr>
               ) : (
                 filteredOficios.map(o => (
                   <tr key={o.id} className="hover:bg-slate-50 transition-colors group">
@@ -255,7 +393,9 @@ export default function Oficios() {
                       <span className="text-sm font-bold text-slate-700 uppercase tracking-tight line-clamp-1 max-w-[200px]">{o.assunto}</span>
                     </td>
                     <td className="px-8 py-5">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{o.tipoOficio || 'N/A'}</span>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-2.5 py-1 rounded-md bg-slate-100">
+                        {normalizarTipoOficio(o.tipoOficio || o.tipo)}
+                      </span>
                     </td>
                     <td className="px-8 py-5">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-tight line-clamp-1">{o.destinatario}</span>
@@ -279,14 +419,14 @@ export default function Oficios() {
                           <>
                             <button 
                               onClick={() => { setEditingOficio(o); setIsReadOnly(false); setIsModalOpen(true); }}
-                              className="p-2 text-crb-navy hover:text-white hover:bg-crb-navy rounded-lg transition-all border border-slate-100 shadow-xs"
+                              className="p-2 text-crb-navy hover:text-white hover:bg-crb-navy rounded-lg transition-all border border-slate-100 shadow-xs cursor-pointer"
                               title="Editar"
                             >
                               <Edit2 size={14} />
                             </button>
                             <button 
                               onClick={() => handleDelete(o.id)}
-                              className="p-2 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all border border-slate-100 shadow-xs"
+                              className="p-2 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all border border-slate-100 shadow-xs cursor-pointer"
                               title="Excluir"
                             >
                               <Trash2 size={14} />
@@ -295,7 +435,7 @@ export default function Oficios() {
                         )}
                         <button 
                           onClick={() => { setEditingOficio(o); setIsReadOnly(true); setIsModalOpen(true); }}
-                          className="p-2 text-slate-400 hover:text-white hover:bg-slate-400 rounded-lg transition-all border border-slate-100 shadow-xs"
+                          className="p-2 text-slate-400 hover:text-white hover:bg-slate-400 rounded-lg transition-all border border-slate-100 shadow-xs cursor-pointer"
                           title="Visualizar"
                         >
                           <Eye size={14} />
@@ -310,6 +450,7 @@ export default function Oficios() {
         </div>
       </div>
 
+      {/* Modal de Cadastro/Edição de Ofício */}
       <AnimatePresence>
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-crb-navy/60 backdrop-blur-sm">
@@ -328,26 +469,57 @@ export default function Oficios() {
                     {isReadOnly ? 'Visualizar Ofício' : (editingOficio?.id ? 'Editar Ofício' : 'Registro de Documento Oficial')}
                   </h3>
                 </div>
-                <button onClick={() => setIsModalOpen(false)} className="text-white/60 hover:text-white transition-colors">
+                <button onClick={() => setIsModalOpen(false)} className="text-white/60 hover:text-white transition-colors cursor-pointer">
                   <X size={24} />
                 </button>
               </div>
 
               <form onSubmit={handleSave} className="p-8 space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Número do Ofício</label>
-                    <input 
-                      required
-                      type="text"
-                      disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                      placeholder="000/2024"
-                      value={editingOficio?.numeroOficio || editingOficio?.numero || ''}
-                      onChange={(e) => setEditingOficio({...editingOficio!, numeroOficio: e.target.value})}
-                    />
+                  {/* A) Campo Número com sugestão automática, botão Gerar automático e texto de ajuda */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">
+                        Número do Ofício
+                      </label>
+                      {!isReadOnly && (
+                        <button
+                          type="button"
+                          onClick={handleGerarNumeroAutomatico}
+                          className="flex items-center gap-1 text-[10px] font-bold text-crb-purple hover:text-crb-purple-dark hover:underline transition-all cursor-pointer"
+                          title="Restaurar sugestão automática do próximo sequencial livre"
+                        >
+                          <Sparkles size={11} />
+                          Gerar automático
+                        </button>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input 
+                        required
+                        type="text"
+                        disabled={isReadOnly}
+                        className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-mono font-bold text-crb-navy disabled:opacity-70"
+                        placeholder="001-2026"
+                        value={editingOficio?.numeroOficio || editingOficio?.numero || ''}
+                        onChange={(e) => {
+                          setIsNumeroManual(true);
+                          setEditingOficio({
+                            ...editingOficio!,
+                            numeroOficio: e.target.value,
+                            numero: e.target.value
+                          });
+                        }}
+                      />
+                    </div>
+                    {!isReadOnly && (
+                      <p className="text-[11px] text-slate-400 font-medium ml-1">
+                        Próximo disponível: <strong className="text-crb-purple font-mono">{proximoSugestao}</strong>
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Assunto / Tópico</label>
                     <input 
                       required
@@ -360,21 +532,29 @@ export default function Oficios() {
                     />
                   </div>
 
-                  <div className="space-y-2">
+                  {/* Tipo de Ofício com opções completas */}
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Tipo de Ofício</label>
                     <select 
                       disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
-                      value={editingOficio?.tipoOficio || 'Circular'}
-                      onChange={(e) => setEditingOficio({...editingOficio!, tipoOficio: e.target.value as any})}
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70 cursor-pointer"
+                      value={editingOficio?.tipoOficio || editingOficio?.tipo || 'Circular'}
+                      onChange={(e) => setEditingOficio({
+                        ...editingOficio!,
+                        tipoOficio: e.target.value,
+                        tipo: e.target.value
+                      })}
                     >
                       <option value="Circular">Ofício Circular</option>
+                      <option value="Presidente">Presidente</option>
+                      <option value="Administrativo">Administrativo</option>
+                      <option value="Gabinete">Gabinete da Presidência</option>
                       <option value="Interno">Comunicação Interna</option>
                       <option value="Externo">Ofício Externo</option>
-                      <option value="Gabinete">Gabinete da Presidência</option>
                     </select>
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Nome do Destinatário</label>
                     <input 
                       required
@@ -387,7 +567,8 @@ export default function Oficios() {
                     />
                   </div>
 
-                  <div className="space-y-2">
+                  {/* Data com recálculo automático de número caso usuário não tenha editado manualmente */}
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Data de Emissão/Envio</label>
                     <input 
                       required
@@ -397,15 +578,34 @@ export default function Oficios() {
                       value={editingOficio?.dataEnvio?.split('T')[0] || editingOficio?.dataEmissao?.split('T')[0] || ''}
                       onChange={(e) => {
                         const val = e.target.value;
-                        setEditingOficio({...editingOficio!, dataEnvio: val ? new Date(val).toISOString() : ''});
+                        const novoAno = getAnoDe(val);
+                        const isoStr = val ? new Date(val).toISOString() : '';
+
+                        setEditingOficio(prev => {
+                          if (!prev) return prev;
+                          // Se o usuário não editou manualmente e for novo registro, recalcula a sugestão do ano
+                          const numAtualizado = (!isNumeroManual && !prev.id)
+                            ? proximoNumero(oficios, novoAno)
+                            : prev.numeroOficio;
+
+                          return {
+                            ...prev,
+                            dataEnvio: isoStr,
+                            dataEmissao: isoStr,
+                            ano: novoAno,
+                            numeroOficio: numAtualizado,
+                            numero: numAtualizado
+                          };
+                        });
                       }}
                     />
                   </div>
-                  <div className="space-y-2">
+
+                  <div className="space-y-1.5">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Situação Atual</label>
                     <select 
                       disabled={isReadOnly}
-                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70"
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-3 px-4 rounded-xl focus:border-crb-purple outline-none transition-all font-bold text-crb-navy disabled:opacity-70 cursor-pointer"
                       value={editingOficio?.status || 'Aguardando Envio'}
                       onChange={(e) => setEditingOficio({...editingOficio!, status: e.target.value as any})}
                     >
@@ -461,7 +661,7 @@ export default function Oficios() {
                             <button
                               type="button"
                               onClick={() => openAttachment(file)}
-                              className="p-1.5 text-slate-500 hover:text-white hover:bg-crb-navy rounded-lg transition-all"
+                              className="p-1.5 text-slate-500 hover:text-white hover:bg-crb-navy rounded-lg transition-all cursor-pointer"
                               title="Visualizar documento"
                             >
                               <Eye size={14} />
@@ -470,7 +670,7 @@ export default function Oficios() {
                               <button
                                 type="button"
                                 onClick={() => removeOficioAnexo(file.id)}
-                                className="p-1.5 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all"
+                                className="p-1.5 text-red-500 hover:text-white hover:bg-red-500 rounded-lg transition-all cursor-pointer"
                                 title="Excluir documento"
                               >
                                 <Trash2 size={14} />
@@ -489,7 +689,7 @@ export default function Oficios() {
                   <button 
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="flex-1 px-6 py-4 border-2 border-slate-100 text-slate-400 font-bold rounded-2xl hover:bg-slate-50 transition-all uppercase tracking-widest text-xs font-sans"
+                    className="flex-1 px-6 py-4 border-2 border-slate-100 text-slate-400 font-bold rounded-2xl hover:bg-slate-50 transition-all uppercase tracking-widest text-xs font-sans cursor-pointer"
                   >
                     {isReadOnly ? 'Fechar' : 'Descartar'}
                   </button>
@@ -497,7 +697,7 @@ export default function Oficios() {
                     <button 
                       type="submit"
                       disabled={saving}
-                      className="flex-1 flex items-center justify-center gap-2 bg-crb-purple text-white px-6 py-4 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold uppercase tracking-widest text-xs disabled:opacity-50"
+                      className="flex-1 flex items-center justify-center gap-2 bg-crb-purple text-white px-6 py-4 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold uppercase tracking-widest text-xs disabled:opacity-50 cursor-pointer"
                     >
                       {saving ? (
                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

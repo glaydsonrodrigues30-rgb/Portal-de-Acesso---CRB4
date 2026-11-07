@@ -100,7 +100,9 @@ export interface Oficio {
   numero?: string;
   assunto: string;
   tipoOficio?: string;
+  tipo?: string;
   destinatario: string;
+  orgaoDestino?: string;
   dataEnvio?: string;
   dataEmissao?: string;
   status: string;
