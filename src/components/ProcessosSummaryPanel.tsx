@@ -267,117 +267,119 @@ export default function ProcessosSummaryPanel({
         </div>
       </div>
 
-      {/* Gráficos: Barras por Tipo e Rosca por Status */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Gráfico de Barras por Tipo */}
-        <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-          <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-purple pl-4">
-            <div>
-              <h4 className="text-lg font-serif font-bold text-crb-navy">Tipos de Solicitação</h4>
-              <p className="text-xs text-slate-500">Distribuição quantitativa normalizada por tipo de pedido</p>
+      {/* Gráficos: Barras por Tipo e Rosca por Status e Evolução */}
+      <div id="painel-processos-graficos" className="space-y-8 bg-white p-4 rounded-3xl">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Gráfico de Barras por Tipo */}
+          <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
+            <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-purple pl-4">
+              <div>
+                <h4 className="text-lg font-serif font-bold text-crb-navy">Tipos de Solicitação</h4>
+                <p className="text-xs text-slate-500">Distribuição quantitativa normalizada por tipo de pedido</p>
+              </div>
+            </div>
+            <div className="w-full h-[320px]">
+              {tiposData.length > 0 ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <BarChart data={tiposData.slice(0, 8)} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={true} stroke="#f1f5f9" />
+                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                    <YAxis 
+                      type="category" 
+                      dataKey="tipo" 
+                      width={150} 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fill: '#1e293b', fontSize: 11, fontWeight: 600 }}
+                    />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: any) => [`${val} processos`, 'Quantidade']}
+                    />
+                    <Bar dataKey="qtd" fill="#7c3aed" radius={[0, 6, 6, 0]} barSize={20} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
+                  Nenhum dado encontrado para este período.
+                </div>
+              )}
             </div>
           </div>
-          <div className="w-full h-[320px]">
-            {tiposData.length > 0 ? (
-              <ResponsiveContainer width="99%" height="100%">
-                <BarChart data={tiposData.slice(0, 8)} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={true} stroke="#f1f5f9" />
-                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis 
-                    type="category" 
-                    dataKey="tipo" 
-                    width={150} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#1e293b', fontSize: 11, fontWeight: 600 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                    formatter={(val: any) => [`${val} processos`, 'Quantidade']}
-                  />
-                  <Bar dataKey="qtd" fill="#7c3aed" radius={[0, 6, 6, 0]} barSize={20} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
-                Nenhum dado encontrado para este período.
+
+          {/* Gráfico de Rosca por Status */}
+          <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
+            <div className="flex items-center gap-3 mb-6 border-l-4 border-emerald-500 pl-4">
+              <div>
+                <h4 className="text-lg font-serif font-bold text-crb-navy">Distribuição por Status</h4>
+                <p className="text-xs text-slate-500">Percentual das deliberações e estágios processuais</p>
               </div>
-            )}
+            </div>
+            <div className="w-full h-[320px]">
+              {statusPieData.length > 0 ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={statusPieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={65}
+                      outerRadius={105}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {statusPieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: any, name: any) => [
+                        `${val} processos (${total > 0 ? ((val / total) * 100).toFixed(1) : 0}%)`,
+                        name
+                      ]}
+                    />
+                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
+                  Nenhum dado de status para o período.
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Gráfico de Rosca por Status */}
+        {/* Gráfico de Linha: Evolução Mensal */}
         <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-          <div className="flex items-center gap-3 mb-6 border-l-4 border-emerald-500 pl-4">
+          <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-blue pl-4">
             <div>
-              <h4 className="text-lg font-serif font-bold text-crb-navy">Distribuição por Status</h4>
-              <p className="text-xs text-slate-500">Percentual das deliberações e estágios processuais</p>
+              <h4 className="text-lg font-serif font-bold text-crb-navy">Evolução Mensal de Solicitações</h4>
+              <p className="text-xs text-slate-500">Fluxo de abertura e entrada de novos processos ao longo dos meses</p>
             </div>
           </div>
-          <div className="w-full h-[320px]">
-            {statusPieData.length > 0 ? (
-              <ResponsiveContainer width="99%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={statusPieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={65}
-                    outerRadius={105}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {statusPieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                    formatter={(val: any, name: any) => [
-                      `${val} processos (${total > 0 ? ((val / total) * 100).toFixed(1) : 0}%)`,
-                      name
-                    ]}
-                  />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
-                Nenhum dado de status para o período.
-              </div>
-            )}
+          <div className="w-full h-[260px]">
+            <ResponsiveContainer width="99%" height="100%">
+              <LineChart data={evolucaoMensal} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }} />
+                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                  formatter={(val: any) => [`${val} processos`, 'Entradas']}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="qtd" 
+                  stroke="#1e3a8a" 
+                  strokeWidth={3} 
+                  dot={{ r: 4, fill: '#1e3a8a', strokeWidth: 2, stroke: '#ffffff' }}
+                  activeDot={{ r: 6, fill: '#7c3aed' }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
-        </div>
-      </div>
-
-      {/* Gráfico de Linha: Evolução Mensal */}
-      <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-        <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-blue pl-4">
-          <div>
-            <h4 className="text-lg font-serif font-bold text-crb-navy">Evolução Mensal de Solicitações</h4>
-            <p className="text-xs text-slate-500">Fluxo de abertura e entrada de novos processos ao longo dos meses</p>
-          </div>
-        </div>
-        <div className="w-full h-[260px]">
-          <ResponsiveContainer width="99%" height="100%">
-            <LineChart data={evolucaoMensal} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }} />
-              <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-              <Tooltip 
-                contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                formatter={(val: any) => [`${val} processos`, 'Entradas']}
-              />
-              <Line 
-                type="monotone" 
-                dataKey="qtd" 
-                stroke="#1e3a8a" 
-                strokeWidth={3} 
-                dot={{ r: 4, fill: '#1e3a8a', strokeWidth: 2, stroke: '#ffffff' }}
-                activeDot={{ r: 6, fill: '#7c3aed' }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
         </div>
       </div>
 

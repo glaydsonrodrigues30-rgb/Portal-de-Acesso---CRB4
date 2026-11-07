@@ -27,6 +27,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { useAuth } from '../lib/AuthContext';
+import { 
+  exportarRelatorioPdfProcessos, 
+  exportarRelatorioPdfOficios, 
+  exportarRelatorioExcelProcessos, 
+  exportarRelatorioExcelOficios 
+} from '../lib/exportRelatorios';
 import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
 import OficiosSummaryPanel from '../components/OficiosSummaryPanel';
 import ProcessosSummaryPanel from '../components/ProcessosSummaryPanel';
@@ -53,9 +60,11 @@ interface ReportFilter {
 }
 
 export default function Relatorios() {
+  const { currentUser, userData } = useAuth();
   const [filters, setFilters] = useState<ReportFilter>({ module: 'debitos' });
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
   const [availableYears, setAvailableYears] = useState<number[]>([]);
   const [availableSituations, setAvailableSituations] = useState<string[]>([]);
@@ -272,32 +281,78 @@ export default function Relatorios() {
 
   const exportToExcel = () => {
     if (data.length === 0) return;
+    const context = {
+      ano: filters.ano,
+      status: filters.status,
+      tipo: filters.tipo,
+      periodoInicio: filters.periodoInicio,
+      periodoFim: filters.periodoFim,
+      operador: userData?.name || currentUser?.displayName || currentUser?.email || 'Administrador CRB-4'
+    };
+
+    if (filters.module === 'processos') {
+      exportarRelatorioExcelProcessos(data, context);
+      return;
+    }
+
+    if (filters.module === 'oficios') {
+      exportarRelatorioExcelOficios(data, context);
+      return;
+    }
+
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Relatorio");
     XLSX.writeFile(wb, `Relatorio_${filters.module}_${filters.ano || 'geral'}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  const exportToPdf = () => {
-    if (data.length === 0) return;
-    const doc = new jsPDF();
-    const tableColumn = Object.keys(data[0]).filter(k => k !== 'id');
-    const tableRows = data.map(item => tableColumn.map(col => item[col]?.toString() || ''));
+  const exportToPdf = async () => {
+    if (data.length === 0 || pdfLoading) return;
+    setPdfLoading(true);
+    try {
+      const context = {
+        ano: filters.ano,
+        status: filters.status,
+        tipo: filters.tipo,
+        periodoInicio: filters.periodoInicio,
+        periodoFim: filters.periodoFim,
+        operador: userData?.name || currentUser?.displayName || currentUser?.email || 'Administrador CRB-4'
+      };
 
-    const titulo = getTituloRelatorio();
-    doc.text(titulo, 14, 15);
-    doc.setFontSize(10);
-    doc.text(`Gerado em: ${new Date().toLocaleString()}`, 14, 22);
+      if (filters.module === 'processos') {
+        await exportarRelatorioPdfProcessos(data, context);
+        return;
+      }
 
-    autoTable(doc, {
-      head: [tableColumn.map(c => c.toUpperCase())],
-      body: tableRows,
-      startY: 30,
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [30, 58, 138] }
-    });
+      if (filters.module === 'oficios') {
+        await exportarRelatorioPdfOficios(data, context);
+        return;
+      }
 
-    doc.save(`Relatorio_${filters.module}_${filters.ano || 'geral'}_${new Date().toISOString().split('T')[0]}.pdf`);
+      // Débitos, Notificações e Negociações mantêm como está
+      const doc = new jsPDF();
+      const tableColumn = Object.keys(data[0]).filter(k => k !== 'id');
+      const tableRows = data.map(item => tableColumn.map(col => item[col]?.toString() || ''));
+
+      const titulo = getTituloRelatorio();
+      doc.text(titulo, 14, 15);
+      doc.setFontSize(10);
+      doc.text(`Gerado em: ${new Date().toLocaleString()}`, 14, 22);
+
+      autoTable(doc, {
+        head: [tableColumn.map(c => c.toUpperCase())],
+        body: tableRows,
+        startY: 30,
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [30, 58, 138] }
+      });
+
+      doc.save(`Relatorio_${filters.module}_${filters.ano || 'geral'}_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error('Erro ao exportar PDF:', err);
+    } finally {
+      setPdfLoading(false);
+    }
   };
 
   const totals = {
@@ -524,10 +579,11 @@ export default function Relatorios() {
               </button>
               <button 
                 onClick={exportToPdf}
-                className="flex items-center gap-2 bg-red-600 text-white px-6 py-4 rounded-2xl hover:bg-red-700 transition-all shadow-lg font-bold uppercase tracking-widest text-xs"
+                disabled={pdfLoading}
+                className="flex items-center gap-2 bg-red-600 text-white px-6 py-4 rounded-2xl hover:bg-red-700 transition-all shadow-lg font-bold uppercase tracking-widest text-xs disabled:opacity-50"
               >
-                <FilePdf size={18} />
-                PDF
+                {pdfLoading ? <Loader2 className="animate-spin" size={18} /> : <FilePdf size={18} />}
+                {pdfLoading ? 'Gerando...' : 'PDF'}
               </button>
             </div>
           )}

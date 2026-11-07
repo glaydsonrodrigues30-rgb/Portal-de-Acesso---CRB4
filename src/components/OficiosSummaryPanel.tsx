@@ -248,147 +248,149 @@ export default function OficiosSummaryPanel({
         </div>
       </div>
 
-      {/* Gráficos: Tipos e Assuntos */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Gráfico de Tipos de Ofício */}
-        <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-          <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-navy pl-4">
-            <div>
-              <h4 className="text-lg font-serif font-bold text-crb-navy">Tipos de Ofício</h4>
-              <p className="text-xs text-slate-500">Classificação conforme dados reais (Presidente, Administrativo, Circular, etc.)</p>
+      {/* Gráficos: Tipos, Assuntos, Rosca e Evolução */}
+      <div id="painel-oficios-graficos" className="space-y-8 bg-white p-4 rounded-3xl">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Gráfico de Tipos de Ofício */}
+          <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
+            <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-navy pl-4">
+              <div>
+                <h4 className="text-lg font-serif font-bold text-crb-navy">Tipos de Ofício</h4>
+                <p className="text-xs text-slate-500">Classificação conforme dados reais (Presidente, Administrativo, Circular, etc.)</p>
+              </div>
+            </div>
+            <div className="w-full h-[300px]">
+              {tipoData.length > 0 ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <BarChart data={tipoData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="tipo" axisLine={false} tickLine={false} tick={{ fill: '#1e293b', fontSize: 11, fontWeight: 700 }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: any) => [`${val} ofícios`, 'Total']}
+                    />
+                    <Bar dataKey="qtd" fill="#1e3a8a" radius={[6, 6, 0, 0]} barSize={36} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
+                  Nenhum ofício registrado.
+                </div>
+              )}
             </div>
           </div>
-          <div className="w-full h-[300px]">
-            {tipoData.length > 0 ? (
+
+          {/* Gráfico de Barras por Assunto */}
+          <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
+            <div className="flex items-center gap-3 mb-6 border-l-4 border-emerald-500 pl-4">
+              <div>
+                <h4 className="text-lg font-serif font-bold text-crb-navy">Assuntos Mais Frequentes</h4>
+                <p className="text-xs text-slate-500">Agrupamento dos principais temas tratados nos ofícios</p>
+              </div>
+            </div>
+            <div className="w-full h-[300px]">
+              {assuntoData.length > 0 ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <BarChart data={assuntoData.slice(0, 7)} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={true} stroke="#f1f5f9" />
+                    <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
+                    <YAxis 
+                      type="category" 
+                      dataKey="assunto" 
+                      width={130} 
+                      axisLine={false} 
+                      tickLine={false} 
+                      tick={{ fill: '#1e293b', fontSize: 11, fontWeight: 600 }}
+                    />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: any) => [`${val} ofícios`, 'Quantidade']}
+                    />
+                    <Bar dataKey="qtd" fill="#10b981" radius={[0, 6, 6, 0]} barSize={20} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
+                  Sem dados de assunto para exibir.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Gráfico de Rosca por Status e Linha de Evolução Mensal */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
+            <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-purple pl-4">
+              <div>
+                <h4 className="text-lg font-serif font-bold text-crb-navy">Distribuição por Status</h4>
+                <p className="text-xs text-slate-500">Situação atual das correspondências</p>
+              </div>
+            </div>
+            <div className="w-full h-[280px]">
+              {statusPieData.length > 0 ? (
+                <ResponsiveContainer width="99%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={statusPieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={95}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {statusPieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: any, name: any) => [
+                        `${val} ofícios (${total > 0 ? ((val / total) * 100).toFixed(1) : 0}%)`,
+                        name
+                      ]}
+                    />
+                    <Legend verticalAlign="bottom" height={36} iconType="circle" />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
+                  Nenhum dado para exibir.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
+            <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-blue pl-4">
+              <div>
+                <h4 className="text-lg font-serif font-bold text-crb-navy">Evolução Mensal de Expedição</h4>
+                <p className="text-xs text-slate-500">Volume de documentos emitidos ao longo do ano</p>
+              </div>
+            </div>
+            <div className="w-full h-[280px]">
               <ResponsiveContainer width="99%" height="100%">
-                <BarChart data={tipoData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
+                <LineChart data={evolucaoMensal} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="tipo" axisLine={false} tickLine={false} tick={{ fill: '#1e293b', fontSize: 11, fontWeight: 700 }} />
+                  <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
                   <Tooltip 
                     contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                    formatter={(val: any) => [`${val} ofícios`, 'Total']}
+                    formatter={(val: any) => [`${val} ofícios`, 'Expedidos']}
                   />
-                  <Bar dataKey="qtd" fill="#1e3a8a" radius={[6, 6, 0, 0]} barSize={36} />
-                </BarChart>
+                  <Line 
+                    type="monotone" 
+                    dataKey="qtd" 
+                    stroke="#7c3aed" 
+                    strokeWidth={3} 
+                    dot={{ r: 4, fill: '#7c3aed', strokeWidth: 2, stroke: '#ffffff' }}
+                    activeDot={{ r: 6, fill: '#1e3a8a' }}
+                  />
+                </LineChart>
               </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
-                Nenhum ofício registrado.
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Gráfico de Barras por Assunto */}
-        <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-          <div className="flex items-center gap-3 mb-6 border-l-4 border-emerald-500 pl-4">
-            <div>
-              <h4 className="text-lg font-serif font-bold text-crb-navy">Assuntos Mais Frequentes</h4>
-              <p className="text-xs text-slate-500">Agrupamento dos principais temas tratados nos ofícios</p>
             </div>
-          </div>
-          <div className="w-full h-[300px]">
-            {assuntoData.length > 0 ? (
-              <ResponsiveContainer width="99%" height="100%">
-                <BarChart data={assuntoData.slice(0, 7)} layout="vertical" margin={{ left: 10, right: 30, top: 10, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={true} stroke="#f1f5f9" />
-                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis 
-                    type="category" 
-                    dataKey="assunto" 
-                    width={130} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#1e293b', fontSize: 11, fontWeight: 600 }}
-                  />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                    formatter={(val: any) => [`${val} ofícios`, 'Quantidade']}
-                  />
-                  <Bar dataKey="qtd" fill="#10b981" radius={[0, 6, 6, 0]} barSize={20} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
-                Sem dados de assunto para exibir.
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Gráfico de Rosca por Status e Linha de Evolução Mensal */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-          <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-purple pl-4">
-            <div>
-              <h4 className="text-lg font-serif font-bold text-crb-navy">Distribuição por Status</h4>
-              <p className="text-xs text-slate-500">Situação atual das correspondências</p>
-            </div>
-          </div>
-          <div className="w-full h-[280px]">
-            {statusPieData.length > 0 ? (
-              <ResponsiveContainer width="99%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={statusPieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={95}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {statusPieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                    formatter={(val: any, name: any) => [
-                      `${val} ofícios (${total > 0 ? ((val / total) * 100).toFixed(1) : 0}%)`,
-                      name
-                    ]}
-                  />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="h-full flex items-center justify-center text-slate-400 font-medium italic">
-                Nenhum dado para exibir.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-md">
-          <div className="flex items-center gap-3 mb-6 border-l-4 border-crb-blue pl-4">
-            <div>
-              <h4 className="text-lg font-serif font-bold text-crb-navy">Evolução Mensal de Expedição</h4>
-              <p className="text-xs text-slate-500">Volume de documentos emitidos ao longo do ano</p>
-            </div>
-          </div>
-          <div className="w-full h-[280px]">
-            <ResponsiveContainer width="99%" height="100%">
-              <LineChart data={evolucaoMensal} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="mes" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11, fontWeight: 600 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 11 }} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px' }}
-                  formatter={(val: any) => [`${val} ofícios`, 'Expedidos']}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="qtd" 
-                  stroke="#7c3aed" 
-                  strokeWidth={3} 
-                  dot={{ r: 4, fill: '#7c3aed', strokeWidth: 2, stroke: '#ffffff' }}
-                  activeDot={{ r: 6, fill: '#1e3a8a' }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
           </div>
         </div>
       </div>
