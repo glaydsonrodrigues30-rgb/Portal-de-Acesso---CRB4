@@ -38,6 +38,10 @@ export interface Debito {
   notificacaoEnviada?: boolean;
   dataNotificacao?: string | null;
   notificacaoResponsavel?: string | null;
+  dividaAtivaInscrita?: boolean;
+  dataInscricaoDividaAtiva?: string | null;
+  numeroCDA?: string | null;
+  dividaAtivaResponsavel?: string | null;
   protestoEnviado?: boolean;
   dataProtesto?: string | null;
   protestoResponsavel?: string | null;
@@ -60,6 +64,7 @@ export interface Debito {
   } | null;
   anexos?: {
     notificacao?: ArquivoAnexo[];
+    dividaAtiva?: ArquivoAnexo[];
     protesto?: ArquivoAnexo[];
     comunicacaoCadin?: ArquivoAnexo[];
     cadin?: ArquivoAnexo[];

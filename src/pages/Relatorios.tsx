@@ -129,6 +129,7 @@ export default function Relatorios() {
           'DÉBITO A VENCER - AGUARDANDO NOTIFICAÇÃO',
           'NOTIFICADO - NO PRAZO DE DEFESA (30 DIAS)',
           'NOTIFICADO - PRAZO ESGOTADO (SEM RESPOSTA)',
+          'INSCRITO EM DÍVIDA ATIVA - AGUARDANDO ENVIO AO CARTÓRIO',
           'EM PROTESTO CARTORÁRIO',
           'PROTESTO ESGOTADO - SEM QUITAÇÃO',
           'COMUNICADO - AGUARDANDO PRAZO CADIN (75 DIAS)',
@@ -200,13 +201,16 @@ export default function Relatorios() {
           const statusInfo = getStatusDebito(item, notifs as any);
           return {
             ...item,
+            dataInscricaoDividaAtiva: item.dataInscricaoDividaAtiva || '-',
+            numeroCDA: item.numeroCDA || '-',
             situacao: statusInfo.situacao,
             fase: statusInfo.fase,
             prazo: statusInfo.prazo,
             diasAtrasoOuRestante: statusInfo.dias,
             inicioEstagio: statusInfo.dataInicioFormatada,
             prazoFinal: statusInfo.prazoFinalFormatado,
-            acaoRecomendada: statusInfo.acaoRecomendada
+            acaoRecomendada: statusInfo.acaoRecomendada,
+            ...(statusInfo.aviso ? { aviso: statusInfo.aviso } : {})
           };
         });
 

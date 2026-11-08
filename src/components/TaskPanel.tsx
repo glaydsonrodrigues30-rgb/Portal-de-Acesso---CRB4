@@ -41,7 +41,7 @@ interface TaskItem {
   debito: Debito;
   fase: string;
   acaoDesc: string;
-  acaoTipo: 'notificar' | 'protesto' | 'comunicar' | 'incluir' | 'aguardar';
+  acaoTipo: 'notificar' | 'divida_ativa' | 'protesto' | 'comunicar' | 'incluir' | 'aguardar';
   dataInicioFormatada: string;
   prazoFinalFormatada: string;
   temDataReal: boolean;
@@ -49,6 +49,8 @@ interface TaskItem {
   dias: number;
   situacao: string;
   isCritico: boolean;
+  aviso?: string;
+  semInscricaoDividaAtiva?: boolean;
 }
 
 export default function TaskPanel({ 
@@ -62,6 +64,7 @@ export default function TaskPanel({
   const [searchTerm, setSearchTerm] = useState('');
   const [executingTask, setExecutingTask] = useState<TaskItem | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [inputCDA, setInputCDA] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Filter unpaid/pending debits using central business status logic
@@ -83,7 +86,9 @@ export default function TaskPanel({
       prazo: info.prazo,
       dias: info.dias,
       situacao: info.situacao,
-      isCritico: info.isCritico
+      isCritico: info.isCritico,
+      aviso: info.aviso,
+      semInscricaoDividaAtiva: info.semInscricaoDividaAtiva
     });
 
     return acc;
@@ -137,7 +142,20 @@ export default function TaskPanel({
           };
           actionLog = 'NOTIFICACAO_REGISTRADA';
           break;
+        case 'divida_ativa':
+          updatedFields = {
+            dividaAtivaInscrita: true,
+            dataInscricaoDividaAtiva: selectedDate,
+            ...(inputCDA.trim() ? { numeroCDA: inputCDA.trim() } : {})
+          };
+          actionLog = 'INSCRICAO_DIVIDA_ATIVA_REGISTRADA';
+          break;
         case 'protesto':
+          if (!executingTask.debito.dataInscricaoDividaAtiva) {
+            alert('Não é permitido marcar o envio ao cartório sem a data de inscrição em Dívida Ativa preenchida. Conforme a Resolução 259 do CFB, o débito deve estar previamente inscrito em Dívida Ativa.');
+            setSubmitting(false);
+            return;
+          }
           updatedFields = {
             protestoEnviado: true,
             dataProtesto: selectedDate
@@ -189,6 +207,12 @@ export default function TaskPanel({
           badge: 'Notificar Devedor',
           color: 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100/50',
           badgeStyle: 'bg-indigo-100 text-indigo-800'
+        };
+      case 'divida_ativa':
+        return {
+          badge: 'Inscrever em Dívida Ativa',
+          color: 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100/50',
+          badgeStyle: 'bg-amber-100 text-amber-900'
         };
       case 'protesto':
         return {
@@ -383,6 +407,18 @@ export default function TaskPanel({
                         <p className="font-bold flex items-center gap-1 mt-0.5">
                           Estágio iniciado em: <span className="text-slate-600 font-sans">{task.dataInicioFormatada}</span>
                         </p>
+                        {task.debito.numeroCDA && (
+                          <p className="font-bold flex items-center gap-1 mt-0.5">
+                            CDA: <span className="text-amber-800 font-mono font-bold">{task.debito.numeroCDA}</span>
+                          </p>
+                        )}
+                        {task.aviso && (
+                          <div className="col-span-1 md:col-span-2 mt-1">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 border border-amber-200 text-amber-800 inline-flex items-center gap-1">
+                              ⚠️ {task.aviso}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -430,6 +466,7 @@ export default function TaskPanel({
                           onClick={() => {
                             setExecutingTask(task);
                             setSelectedDate(new Date().toISOString().split('T')[0]);
+                            setInputCDA(task.debito.numeroCDA || '');
                           }}
                           className={cn(
                             "flex-1 lg:flex-none p-2.5 border rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all text-white bg-crb-navy hover:bg-[#152e6c] border-transparent"
@@ -504,6 +541,24 @@ export default function TaskPanel({
                     Esta data iniciará a contagem do respectivo prazo legal de cobrança correspondente.
                   </p>
                 </div>
+
+                {executingTask.acaoTipo === 'divida_ativa' && (
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block ml-1">
+                      Número da CDA (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: CDA-2026/001"
+                      value={inputCDA}
+                      onChange={(e) => setInputCDA(e.target.value)}
+                      className="w-full bg-slate-50 border-2 border-slate-100 py-2.5 px-4 rounded-xl focus:border-crb-purple outline-none font-bold text-xs text-crb-navy"
+                    />
+                    <p className="text-[9px] text-slate-400 font-bold italic ml-1">
+                      Certidão de Dívida Ativa correspondente ao título executivo extrajudicial.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="p-6 bg-slate-50 border-t border-slate-150 flex gap-4">

@@ -1,8 +1,8 @@
 import { Debito, Notificacao } from '../types';
-import { getStatusDebito, parseDateSafely, StatusDebitoInfo } from './statusDebito';
+import { getStatusDebito, parseDateSafely, StatusDebitoInfo, FaseDebito } from './statusDebito';
 
 export interface FlowControl {
-  faseAtual: 'Aguardando Notificação' | 'Notificação' | 'Protesto' | 'Comunicação CADIN' | 'Aguardando inclusão CADIN' | 'CADIN';
+  faseAtual: FaseDebito;
   dataInicioFase: string | null;
   prazoFinal: string | null;
   status: 'Em prazo' | 'Vencido' | 'Concluído';

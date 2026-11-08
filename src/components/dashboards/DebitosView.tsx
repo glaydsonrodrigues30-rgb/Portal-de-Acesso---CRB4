@@ -6,7 +6,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend
 } from 'recharts';
-import { CreditCard, DollarSign, Activity, AlertCircle, TrendingDown, Mail, Shield, AlertTriangle, ShieldCheck, Hourglass, CheckCircle2, ChevronRight, HelpCircle, Clock } from 'lucide-react';
+import { CreditCard, DollarSign, Activity, AlertCircle, TrendingDown, Mail, Shield, AlertTriangle, ShieldCheck, Hourglass, CheckCircle2, ChevronRight, HelpCircle, Clock, FileText } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { getStatusDebito, parseDateSafely } from '../../lib/statusDebito';
 
@@ -53,6 +53,7 @@ export default function DebitosView() {
         const faseMap: Record<string, number> = {
           'Aguardando Notificação': 0,
           'Notificação': 0,
+          'Dívida Ativa': 0,
           'Protesto': 0,
           'Comunicação CADIN': 0,
           'Aguardando inclusão CADIN': 0,
@@ -61,6 +62,7 @@ export default function DebitosView() {
         const faseValorMap: Record<string, number> = {
           'Aguardando Notificação': 0,
           'Notificação': 0,
+          'Dívida Ativa': 0,
           'Protesto': 0,
           'Comunicação CADIN': 0,
           'Aguardando inclusão CADIN': 0,
@@ -80,6 +82,7 @@ export default function DebitosView() {
         const funnelOrder = [
           'Aguardando Notificação',
           'Notificação',
+          'Dívida Ativa',
           'Protesto',
           'Comunicação CADIN',
           'Aguardando inclusão CADIN',
@@ -88,6 +91,7 @@ export default function DebitosView() {
         const funnelMap: Record<string, { quantidade: number; valor: number; color: string }> = {
           'Aguardando Notificação': { quantidade: 0, valor: 0, color: '#64748b' },
           'Notificação': { quantidade: 0, valor: 0, color: '#2563eb' },
+          'Dívida Ativa': { quantidade: 0, valor: 0, color: '#f59e0b' },
           'Protesto': { quantidade: 0, valor: 0, color: '#7c3aed' },
           'Comunicação CADIN': { quantidade: 0, valor: 0, color: '#0284c7' },
           'Aguardando inclusão CADIN': { quantidade: 0, valor: 0, color: '#ea580c' },
@@ -342,7 +346,7 @@ export default function DebitosView() {
         </div>
 
         {/* Visual Pipeline Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-6">
           {stats.flowStatsData.map((fase: any, i: number) => {
             const configMap: Record<string, { icon: any, color: string, border: string, text: string, flowDesc: string }> = {
               'Aguardando Notificação': {
@@ -358,6 +362,13 @@ export default function DebitosView() {
                 border: 'border-blue-200',
                 text: 'Prazo: 30 dias',
                 flowDesc: 'Inicia com a criação da notificação formal do débito.'
+              },
+              'Dívida Ativa': {
+                icon: FileText,
+                color: 'bg-amber-100 text-amber-800',
+                border: 'border-amber-200',
+                text: 'Inscrição CDA',
+                flowDesc: 'Inscrito em Dívida Ativa antes do cartório (Res. 259).'
               },
               'Protesto': {
                 icon: Shield,

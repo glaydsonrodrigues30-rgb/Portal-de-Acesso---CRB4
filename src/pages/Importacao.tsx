@@ -474,6 +474,11 @@ export default function Importacao() {
         const rawStatus = findValue(item, ['Status Geral', 'Status', 'Situação', 'Situacao']);
         
         const rawDataNotif = findValue(item, ['Data Notificação', 'Data da Notificação', 'Notificação', 'Data Notificacao']);
+        const rawDataDividaAtiva = findValue(item, [
+          'Data Inscrição Dívida Ativa', 'Data Inscricao Divida Ativa', 'Data Dívida Ativa', 'Data Divida Ativa',
+          'Dívida Ativa', 'Divida Ativa', 'Inscrição Dívida Ativa', 'Inscricao Divida Ativa', 'Data CDA', 'Inscrição em Dívida Ativa'
+        ]);
+        const rawNumeroCDA = findValue(item, ['Número CDA', 'Numero CDA', 'CDA', 'Nº CDA', 'No CDA']);
         const rawDataProtesto = findValue(item, ['Data Protesto', 'Data do Protesto', 'Protesto', 'DataProtesto']);
         const rawDataComCadin = findValue(item, ['Data Comunicação CADIN', 'Data Comunicacao Cadin', 'Comunicação CADIN']);
         const rawDataCadin = findValue(item, ['Data CADIN', 'Inclusão CADIN', 'Data Inclusao Cadin', 'DataCadin']);
@@ -601,6 +606,8 @@ export default function Importacao() {
 
         const parsedNotif = parseDataFlex(rawDataNotif);
         if (parsedNotif.warning) rowWarnings.push(`Notificação: ${parsedNotif.warning}`);
+        const parsedDividaAtiva = parseDataFlex(rawDataDividaAtiva);
+        if (parsedDividaAtiva.warning) rowWarnings.push(`Dívida Ativa: ${parsedDividaAtiva.warning}`);
         const parsedProtesto = parseDataFlex(rawDataProtesto);
         if (parsedProtesto.warning) rowWarnings.push(`Protesto: ${parsedProtesto.warning}`);
         const parsedComCadin = parseDataFlex(rawDataComCadin);
@@ -655,6 +662,8 @@ export default function Importacao() {
           statusGeral: cleanText(rawStatus) || 'Pendente',
           updatedAt: new Date().toISOString(),
           ...(parsedNotif.iso ? { notificacaoEnviada: true, dataNotificacao: parsedNotif.iso } : {}),
+          ...(parsedDividaAtiva.iso ? { dividaAtivaInscrita: true, dataInscricaoDividaAtiva: parsedDividaAtiva.iso } : {}),
+          ...(rawNumeroCDA ? { numeroCDA: cleanText(rawNumeroCDA) } : {}),
           ...(parsedProtesto.iso ? { protestoEnviado: true, dataProtesto: parsedProtesto.iso } : {}),
           ...(parsedComCadin.iso ? { cadinComunicado: true, dataComunicacaoCadin: parsedComCadin.iso } : {}),
           ...(parsedCadin.iso ? { cadinIncluido: true, dataCadin: parsedCadin.iso } : {})

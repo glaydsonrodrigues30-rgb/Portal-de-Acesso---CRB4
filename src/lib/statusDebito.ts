@@ -64,6 +64,7 @@ import { Debito, Notificacao } from '../types';
 export type FaseDebito =
   | 'Aguardando Notificação'
   | 'Notificação'
+  | 'Dívida Ativa'
   | 'Protesto'
   | 'Comunicação CADIN'
   | 'Aguardando inclusão CADIN'
@@ -71,7 +72,7 @@ export type FaseDebito =
 
 export type StatusPrazo = 'EM PRAZO' | 'VENCIDO' | 'CONCLUÍDO';
 
-export type AcaoTipo = 'notificar' | 'protesto' | 'comunicar' | 'incluir' | 'aguardar' | 'nenhuma';
+export type AcaoTipo = 'notificar' | 'divida_ativa' | 'protesto' | 'comunicar' | 'incluir' | 'aguardar' | 'nenhuma';
 
 export interface StatusDebitoInfo {
   fase: FaseDebito;
@@ -95,6 +96,9 @@ export interface StatusDebitoInfo {
   status: 'Em prazo' | 'Vencido' | 'Concluído';
   diasRestantes: number;
   atrasoDias: number;
+  // Suporte a Dívida Ativa e avisos de conformidade (Res. 259 CFB)
+  aviso?: string;
+  semInscricaoDividaAtiva?: boolean;
 }
 
 /**
@@ -221,6 +225,12 @@ export function getEstagioInicio(
     return { data: d, dataFormatada: formatDateBR(d), label: 'Envio a Cartório' };
   }
 
+  const hasDividaAtiva = !!(debito.dividaAtivaInscrita || debito.dataInscricaoDividaAtiva);
+  if (hasDividaAtiva) {
+    const d = parseDateSafely(debito.dataInscricaoDividaAtiva);
+    return { data: d, dataFormatada: formatDateBR(d), label: 'Inscrição Dívida Ativa' };
+  }
+
   if (hasNotif) {
     const raw = debito.dataNotificacao || (matchingNotif ? (matchingNotif.dataNotificacao || matchingNotif.createdAt) : null);
     const d = parseDateSafely(raw);
@@ -313,6 +323,7 @@ export function getStatusDebito(
   const hasCadin = !!(debito.cadinIncluido || debito.dataCadin);
   const hasCadinComunicado = !!(debito.cadinComunicado || debito.dataComunicacaoCadin);
   const hasProtesto = !!(debito.protestoEnviado || debito.dataProtesto);
+  const hasDividaAtiva = !!(debito.dividaAtivaInscrita || debito.dataInscricaoDividaAtiva);
   const hasNotif = !!(debito.notificacaoEnviada || debito.dataNotificacao || matchingNotif);
 
   // 1. FASE CADIN (Inclusão efetivada)
@@ -434,9 +445,11 @@ export function getStatusDebito(
     };
   }
 
-  // 4. FASE PROTESTO
+  // 3. FASE PROTESTO
   if (hasProtesto) {
     const dataReal = parseDateSafely(debito.dataProtesto);
+    const semInscricaoDividaAtiva = !debito.dataInscricaoDividaAtiva && !debito.dividaAtivaInscrita;
+    const avisoDividaAtiva = semInscricaoDividaAtiva ? 'sem inscrição em dívida ativa registrada' : undefined;
 
     if (!dataReal) {
       return {
@@ -460,6 +473,8 @@ export function getStatusDebito(
         status: 'Em prazo',
         diasRestantes: 0,
         atrasoDias: 0,
+        aviso: avisoDividaAtiva,
+        semInscricaoDividaAtiva,
       };
     }
 
@@ -490,6 +505,8 @@ export function getStatusDebito(
         status: 'Em prazo',
         diasRestantes: diasRest,
         atrasoDias: 0,
+        aviso: avisoDividaAtiva,
+        semInscricaoDividaAtiva,
       };
     }
 
@@ -515,6 +532,40 @@ export function getStatusDebito(
       status: 'Vencido',
       diasRestantes: 0,
       atrasoDias: diasAtraso,
+      aviso: avisoDividaAtiva,
+      semInscricaoDividaAtiva,
+    };
+  }
+
+  // 4. FASE DÍVIDA ATIVA (Inscrito em Dívida Ativa - Aguardando envio ao cartório)
+  if (hasDividaAtiva) {
+    const dataReal = parseDateSafely(debito.dataInscricaoDividaAtiva);
+    const temData = dataReal !== null;
+    const dataInicioISO = formatDateISO(dataReal);
+    const dataInicioBR = formatDateBR(dataReal);
+    const diasDecorridos = dataReal ? diffDays(today, dataReal) : 0;
+
+    return {
+      fase: 'Dívida Ativa',
+      prazo: 'VENCIDO',
+      dias: diasDecorridos,
+      temDataReal: temData,
+      dataInicioRaw: dataInicioISO,
+      dataInicioFormatada: dataInicioBR,
+      prazoFinalRaw: dataInicioISO,
+      prazoFinalFormatado: dataInicioBR,
+      acaoRecomendada: 'Enviar para Protesto',
+      acaoTipo: 'protesto',
+      situacao: isNegociacao ? 'EM NEGOCIAÇÃO' : 'INSCRITO EM DÍVIDA ATIVA - AGUARDANDO ENVIO AO CARTÓRIO',
+      isCritico: true,
+      isPago: false,
+      isNegociacao,
+      faseAtual: 'Dívida Ativa',
+      dataInicioFase: dataInicioISO,
+      prazoFinal: dataInicioISO,
+      status: 'Vencido',
+      diasRestantes: 0,
+      atrasoDias: diasDecorridos,
     };
   }
 
@@ -579,9 +630,10 @@ export function getStatusDebito(
       };
     }
 
+    // Após os 30 dias sem resposta: entra na fase Dívida Ativa para formalizar a inscrição
     const diasAtraso = diffDays(today, prazoFinal30);
     return {
-      fase: 'Notificação',
+      fase: 'Dívida Ativa',
       prazo: 'VENCIDO',
       dias: diasAtraso,
       temDataReal: true,
@@ -589,13 +641,13 @@ export function getStatusDebito(
       dataInicioFormatada: formatDateBR(dataReal),
       prazoFinalRaw: prazoFinalISO,
       prazoFinalFormatado: formatDateBR(prazoFinal30),
-      acaoRecomendada: 'Enviar para Protesto',
-      acaoTipo: 'protesto',
+      acaoRecomendada: 'Inscrever em Dívida Ativa',
+      acaoTipo: 'divida_ativa',
       situacao: isNegociacao ? 'EM NEGOCIAÇÃO' : 'NOTIFICADO - PRAZO ESGOTADO (SEM RESPOSTA)',
       isCritico: true,
       isPago: false,
       isNegociacao,
-      faseAtual: 'Notificação',
+      faseAtual: 'Dívida Ativa',
       dataInicioFase: dataInicioISO,
       prazoFinal: prazoFinalISO,
       status: 'Vencido',

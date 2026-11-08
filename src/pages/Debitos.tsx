@@ -66,6 +66,8 @@ export default function Debitos() {
   const [saving, setSaving] = useState(false);
 
   const [tempNotifDate, setTempNotifDate] = useState('');
+  const [tempDividaAtivaDate, setTempDividaAtivaDate] = useState('');
+  const [tempNumeroCDA, setTempNumeroCDA] = useState('');
   const [tempProtestoDate, setTempProtestoDate] = useState('');
   const [tempCadinComunicacaoDate, setTempCadinComunicacaoDate] = useState('');
   const [tempCadinDate, setTempCadinDate] = useState('');
@@ -74,7 +76,7 @@ export default function Debitos() {
   const [filterFase, setFilterFase] = useState('');
   const [filterPrazo, setFilterPrazo] = useState('');
 
-  const handleStageFileUpload = (e: React.ChangeEvent<HTMLInputElement>, stage: 'notificacao' | 'protesto' | 'comunicacaoCadin' | 'cadin') => {
+  const handleStageFileUpload = (e: React.ChangeEvent<HTMLInputElement>, stage: 'notificacao' | 'dividaAtiva' | 'protesto' | 'comunicacaoCadin' | 'cadin') => {
     if (!e.target.files) return;
     const filesArray = Array.from(e.target.files) as File[];
     
@@ -115,7 +117,7 @@ export default function Debitos() {
     e.target.value = '';
   };
 
-  const removeStageAnexo = (stage: 'notificacao' | 'protesto' | 'comunicacaoCadin' | 'cadin', id: string) => {
+  const removeStageAnexo = (stage: 'notificacao' | 'dividaAtiva' | 'protesto' | 'comunicacaoCadin' | 'cadin', id: string) => {
     setEditingDebito(prev => {
       if (!prev) return prev;
       const currentAnexos = prev.anexos || {};
@@ -134,11 +136,15 @@ export default function Debitos() {
     if (editingDebito) {
       const todayString = new Date().toISOString().split('T')[0];
       setTempNotifDate(editingDebito.dataNotificacao || todayString);
+      setTempDividaAtivaDate(editingDebito.dataInscricaoDividaAtiva || todayString);
+      setTempNumeroCDA(editingDebito.numeroCDA || '');
       setTempProtestoDate(editingDebito.dataProtesto || todayString);
       setTempCadinComunicacaoDate(editingDebito.dataComunicacaoCadin || todayString);
       setTempCadinDate(editingDebito.dataCadin || todayString);
     } else {
       setTempNotifDate('');
+      setTempDividaAtivaDate('');
+      setTempNumeroCDA('');
       setTempProtestoDate('');
       setTempCadinComunicacaoDate('');
       setTempCadinDate('');
@@ -194,6 +200,15 @@ export default function Debitos() {
       }
     }
 
+    // Validação Resolução 259 CFB: não permitir marcar envio ao cartório sem dataInscricaoDividaAtiva preenchida
+    if (editingDebito.protestoEnviado && !editingDebito.dataInscricaoDividaAtiva) {
+      const originalDebito = editingDebito.id ? debitos.find(d => d.id === editingDebito.id) : null;
+      if (!originalDebito?.protestoEnviado) {
+        alert('Não é permitido marcar o envio ao cartório sem a data de inscrição em Dívida Ativa preenchida. Conforme a Resolução 259 do CFB, o débito deve estar previamente inscrito em Dívida Ativa.');
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const dataToSave = {
@@ -212,6 +227,10 @@ export default function Debitos() {
         notificacaoEnviada: editingDebito.notificacaoEnviada || false,
         dataNotificacao: editingDebito.dataNotificacao || null,
         notificacaoResponsavel: editingDebito.notificacaoResponsavel || null,
+        dividaAtivaInscrita: editingDebito.dividaAtivaInscrita || false,
+        dataInscricaoDividaAtiva: editingDebito.dataInscricaoDividaAtiva || null,
+        numeroCDA: editingDebito.numeroCDA || null,
+        dividaAtivaResponsavel: editingDebito.dividaAtivaResponsavel || null,
         protestoEnviado: editingDebito.protestoEnviado || false,
         dataProtesto: editingDebito.dataProtesto || null,
         protestoResponsavel: editingDebito.protestoResponsavel || null,
@@ -835,17 +854,175 @@ export default function Debitos() {
                             )}
                           </div>
 
-                          {/* 2. PROTESTO */}
+                          {/* 2. DÍVIDA ATIVA */}
+                          <div className={cn(
+                            "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
+                            (editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? "border-amber-300 bg-amber-50/10" : "border-slate-100",
+                            (!editingDebito.notificacaoEnviada && !isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
+                          )}>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <FileText size={14} className={(editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? "text-amber-700" : "text-slate-400"} />
+                                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                                  2. Inscrição em Dívida Ativa
+                                </span>
+                              </div>
+                              {(editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? (
+                                <div className="mt-2 space-y-1">
+                                  <span className="text-xs font-bold text-amber-800 bg-amber-100/70 px-2.5 py-1 rounded-md inline-block font-sans">
+                                    Inscrito em: {editingDebito.dataInscricaoDividaAtiva ? editingDebito.dataInscricaoDividaAtiva.split('-').reverse().join('/') : 'S/A'}
+                                  </span>
+                                  {editingDebito.numeroCDA && (
+                                    <span className="text-[10px] font-mono font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded block w-fit">
+                                      CDA: {editingDebito.numeroCDA}
+                                    </span>
+                                  )}
+                                  {editingDebito.dividaAtivaResponsavel && (
+                                    <span className="text-[9px] text-slate-400 font-medium block tracking-tight">
+                                      Resp: {editingDebito.dividaAtivaResponsavel}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
+                                  Obrigatório antes do cartório (Res. 259 CFB). Realizada após 30 dias de notificação.
+                                </p>
+                              )}
+
+                              {/* Divida Ativa Attachments list */}
+                              {editingDebito.anexos?.dividaAtiva && editingDebito.anexos.dividaAtiva.length > 0 && (
+                                <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-2">
+                                  <span className="text-[9px] uppercase font-bold text-slate-400 block">Documentos:</span>
+                                  {editingDebito.anexos.dividaAtiva.map((file) => (
+                                    <div key={file.id} className="flex items-center justify-between p-1.5 bg-slate-50 border border-slate-100 rounded-lg text-xs">
+                                      <span className="font-bold text-slate-600 truncate max-w-[120px] block" title={file.nome}>
+                                        {file.nome}
+                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <button
+                                          type="button"
+                                          onClick={() => openAttachment(file)}
+                                          className="p-1 text-slate-500 hover:text-white hover:bg-crb-navy rounded transition-colors"
+                                          title="Visualizar documento"
+                                        >
+                                          <Eye size={12} />
+                                        </button>
+                                        {!isReadOnly && (
+                                          <button
+                                            type="button"
+                                            onClick={() => removeStageAnexo('dividaAtiva', file.id)}
+                                            className="p-1 text-red-500 hover:text-white hover:bg-red-500 rounded transition-colors"
+                                            title="Excluir documento"
+                                          >
+                                            <Trash2 size={12} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {!isReadOnly && (editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) && (
+                                <div className="mt-2 pt-1 border-t border-dashed border-slate-100">
+                                  <label className="flex items-center justify-center gap-1 p-1.5 border border-dashed border-slate-200 hover:border-crb-purple rounded-lg cursor-pointer text-slate-500 hover:text-crb-purple transition-all text-center">
+                                    <Plus size={12} />
+                                    <span className="text-[9px] font-bold uppercase tracking-wider">Novo Anexo</span>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      className="hidden"
+                                      onChange={(e) => handleStageFileUpload(e, 'dividaAtiva')}
+                                    />
+                                  </label>
+                                </div>
+                              )}
+                            </div>
+
+                            {!isReadOnly && (
+                              <div className="pt-1">
+                                {(editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingDebito({
+                                        ...editingDebito,
+                                        dividaAtivaInscrita: false,
+                                        dataInscricaoDividaAtiva: null,
+                                        numeroCDA: null,
+                                        dividaAtivaResponsavel: null,
+                                        protestoEnviado: false,
+                                        dataProtesto: null,
+                                        protestoResponsavel: null,
+                                        cadinComunicado: false,
+                                        dataComunicacaoCadin: null,
+                                        comunicacaoCadinResponsavel: null,
+                                        cadinIncluido: false,
+                                        dataCadin: null,
+                                        cadinResponsavel: null
+                                      });
+                                    }}
+                                    className="w-full text-[10px] uppercase tracking-widest font-black text-red-500 hover:text-red-700 hover:underline text-left mt-1"
+                                  >
+                                    ✕ Remover Dívida Ativa
+                                  </button>
+                                ) : (
+                                  <div className="space-y-2">
+                                    <div>
+                                      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">Data Inscrição</label>
+                                      <input 
+                                        type="date"
+                                        disabled={!editingDebito.notificacaoEnviada}
+                                        value={tempDividaAtivaDate}
+                                        onChange={(e) => setTempDividaAtivaDate(e.target.value)}
+                                        className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">Nº CDA (Opcional)</label>
+                                      <input 
+                                        type="text"
+                                        disabled={!editingDebito.notificacaoEnviada}
+                                        placeholder="Ex: CDA-2026/001"
+                                        value={tempNumeroCDA}
+                                        onChange={(e) => setTempNumeroCDA(e.target.value)}
+                                        className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      disabled={!editingDebito.notificacaoEnviada}
+                                      onClick={() => {
+                                        setEditingDebito({
+                                          ...editingDebito,
+                                          dividaAtivaInscrita: true,
+                                          dataInscricaoDividaAtiva: tempDividaAtivaDate || todayStr,
+                                          numeroCDA: tempNumeroCDA.trim() || null,
+                                          dividaAtivaResponsavel: userData?.nome || userData?.email || 'Sistema'
+                                        });
+                                      }}
+                                      title={!editingDebito.notificacaoEnviada ? "Inscrição só permitida após notificação" : "Inscrever débito em Dívida Ativa"}
+                                      className="w-full text-[10px] text-white bg-amber-600 hover:bg-amber-700 py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
+                                    >
+                                      ✓ Inscrever em Dívida Ativa
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. PROTESTO */}
                           <div className={cn(
                             "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
                             editingDebito.protestoEnviado ? "border-purple-200 bg-purple-50/5" : "border-slate-100",
-                            (!editingDebito.notificacaoEnviada && !isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
+                            (!editingDebito.dataInscricaoDividaAtiva && !editingDebito.protestoEnviado && !isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
                           )}>
                             <div>
                               <div className="flex items-center gap-1.5">
                                 <Shield size={14} className={editingDebito.protestoEnviado ? "text-purple-600" : "text-slate-400"} />
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                                  2. Protesto
+                                  3. Protesto
                                 </span>
                               </div>
                               {editingDebito.protestoEnviado ? (
@@ -858,10 +1035,15 @@ export default function Debitos() {
                                       Resp: {editingDebito.protestoResponsavel}
                                     </span>
                                   )}
+                                  {!editingDebito.dataInscricaoDividaAtiva && (
+                                    <span className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 border border-amber-200 text-amber-800 block w-fit">
+                                      ⚠️ sem inscrição em dívida ativa registrada
+                                    </span>
+                                  )}
                                 </div>
                               ) : (
                                 <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
-                                  Requer notificação prévia. Envia débito ao cartório por 180 dias.
+                                  Requer prévia inscrição em Dívida Ativa (Res. 259 CFB). Envia débito ao cartório por 180 dias.
                                 </p>
                               )}
 
@@ -942,15 +1124,19 @@ export default function Debitos() {
                                   <div className="space-y-2">
                                     <input 
                                       type="date"
-                                      disabled={!editingDebito.notificacaoEnviada}
+                                      disabled={!editingDebito.dataInscricaoDividaAtiva}
                                       value={tempProtestoDate}
                                       onChange={(e) => setTempProtestoDate(e.target.value)}
                                       className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
                                     />
                                     <button
                                       type="button"
-                                      disabled={!editingDebito.notificacaoEnviada}
+                                      disabled={!editingDebito.dataInscricaoDividaAtiva}
                                       onClick={() => {
+                                        if (!editingDebito.dataInscricaoDividaAtiva) {
+                                          alert('Não é permitido marcar o envio ao cartório sem a data de inscrição em Dívida Ativa preenchida. Conforme a Resolução 259 do CFB, o débito deve estar previamente inscrito em Dívida Ativa.');
+                                          return;
+                                        }
                                         setEditingDebito({
                                           ...editingDebito,
                                           protestoEnviado: true,
@@ -958,7 +1144,7 @@ export default function Debitos() {
                                           protestoResponsavel: userData?.nome || userData?.email || 'Sistema'
                                         });
                                       }}
-                                      title={!editingDebito.notificacaoEnviada ? "Protesto só permitido após notificação" : "Enviar débito para protesto em cartório"}
+                                      title={!editingDebito.dataInscricaoDividaAtiva ? "Envio ao cartório requer prévia inscrição em Dívida Ativa (Res. 259 CFB)" : "Enviar débito para protesto em cartório"}
                                       className="w-full text-[10px] text-white bg-crb-navy hover:bg-[#112455] py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
                                     >
                                       ✓ Registrar Protesto
@@ -969,7 +1155,7 @@ export default function Debitos() {
                             )}
                           </div>
 
-                          {/* 3. COMUNICAÇÃO CADIN */}
+                          {/* 4. COMUNICAÇÃO CADIN */}
                           <div className={cn(
                             "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
                             editingDebito.cadinComunicado ? "border-indigo-200 bg-indigo-50/5" : "border-slate-100",
@@ -979,7 +1165,7 @@ export default function Debitos() {
                               <div className="flex items-center gap-1.5">
                                 <Clock size={14} className={editingDebito.cadinComunicado ? "text-indigo-600" : "text-slate-400"} />
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                                  3. Comunicação CADIN
+                                  4. Comunicação CADIN
                                 </span>
                               </div>
                               {editingDebito.cadinComunicado ? (
@@ -1104,7 +1290,7 @@ export default function Debitos() {
                             )}
                           </div>
 
-                          {/* 4. CADIN */}
+                          {/* 5. CADIN */}
                           <div className={cn(
                             "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
                             editingDebito.cadinIncluido ? "border-red-200 bg-red-50/5" : "border-slate-100",
@@ -1114,7 +1300,7 @@ export default function Debitos() {
                               <div className="flex items-center gap-1.5">
                                 <AlertTriangle size={14} className={editingDebito.cadinIncluido ? "text-red-600" : "text-slate-400"} />
                                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
-                                  4. CADIN
+                                  5. CADIN
                                 </span>
                               </div>
                               {editingDebito.cadinIncluido ? (
@@ -1398,6 +1584,69 @@ export default function Debitos() {
                               </div>
                             </div>
 
+                            {/* 2. DÍVIDA ATIVA */}
+                            <div className="relative">
+                              <div className={cn(
+                                "absolute -left-[31px] top-1.5 w-4 h-4 rounded-full flex items-center justify-center shadow-xs",
+                                (editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? "bg-amber-100 border-2 border-amber-500" : "bg-slate-50 border-2 border-slate-300"
+                              )}>
+                                <span className={cn(
+                                  "w-1.5 h-1.5 rounded-full",
+                                  (editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? "bg-amber-500" : "bg-slate-300"
+                                )}></span>
+                              </div>
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className={cn("text-xs font-bold uppercase tracking-widest block", (editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? "text-amber-800" : "text-slate-500")}>
+                                    2. Inscrição em Dívida Ativa
+                                  </span>
+                                  {(editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) && (
+                                    <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                                      {editingDebito.dataInscricaoDividaAtiva ? editingDebito.dataInscricaoDividaAtiva.split('-').reverse().join('/') : 'S/A'}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-555 leading-relaxed font-semibold">
+                                  {(editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva)
+                                    ? `Inscrito em Dívida Ativa ${editingDebito.numeroCDA ? `(CDA: ${editingDebito.numeroCDA})` : ''} por ${editingDebito.dividaAtivaResponsavel || 'Sistema'}.`
+                                    : "Pendente. Decorrido o prazo de 30 dias de notificação sem regularização, o débito é inscrito em Dívida Ativa antes do envio ao cartório."
+                                  }
+                                </p>
+                                
+                                {/* Divida Ativa attached files */}
+                                {editingDebito.anexos?.dividaAtiva && editingDebito.anexos.dividaAtiva.length > 0 && (
+                                  <div className="mt-2 space-y-1">
+                                    {editingDebito.anexos.dividaAtiva.map((file) => (
+                                      <div key={file.id} className="flex items-center justify-between p-2 bg-white hover:bg-slate-50 border border-slate-200/60 rounded-xl text-xs transition-colors shadow-2xs">
+                                        <div className="flex items-center gap-2 truncate">
+                                          <FileText size={14} className="text-slate-400 shrink-0" />
+                                          <div className="flex flex-col truncate">
+                                            <span className="font-bold text-slate-700 truncate max-w-[150px]" title={file.nome}>
+                                              {file.nome}
+                                            </span>
+                                            <span className="text-[9px] text-slate-400 font-medium">
+                                              {file.tamanho ? `${(file.tamanho / 1024).toFixed(1)} KB` : 'S/A'} • {file.dataUpload ? new Date(file.dataUpload).toLocaleDateString('pt-BR') : 'Sem data'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openAttachment(file)}
+                                            className="p-1 px-1.5 bg-slate-50 hover:bg-crb-navy border border-slate-200 hover:border-crb-navy text-slate-500 hover:text-white rounded-lg transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                            title="Visualizar documento"
+                                          >
+                                            <Eye size={12} />
+                                            Abrir
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
                             {/* 3. PROTESTO */}
                             <div className="relative">
                               <div className={cn(
@@ -1412,7 +1661,7 @@ export default function Debitos() {
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between">
                                   <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.protestoEnviado ? "text-purple-700" : "text-slate-500")}>
-                                    2. Envio para Protesto
+                                    3. Envio para Protesto
                                   </span>
                                   {editingDebito.protestoEnviado && (
                                     <span className="text-[10px] font-mono font-bold text-purple-700 bg-purple-50 border border-purple-100 px-2 py-0.5 rounded-md">
@@ -1475,7 +1724,7 @@ export default function Debitos() {
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between">
                                   <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.cadinComunicado ? "text-indigo-700" : "text-slate-500")}>
-                                    3. Comunicação CADIN
+                                    4. Comunicação CADIN
                                   </span>
                                   {editingDebito.cadinComunicado && (
                                     <span className="text-[10px] font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md">
@@ -1538,7 +1787,7 @@ export default function Debitos() {
                               <div className="space-y-1">
                                 <div className="flex items-center justify-between">
                                   <span className={cn("text-xs font-bold uppercase tracking-widest block", editingDebito.cadinIncluido ? "text-red-700" : "text-slate-500")}>
-                                    4. Cadastro no CADIN Efetivado
+                                    5. Cadastro no CADIN Efetivado
                                   </span>
                                   {editingDebito.cadinIncluido && (
                                     <span className="text-[10px] font-mono font-bold text-red-700 bg-red-50 border border-red-100 px-2 py-0.5 rounded-md">
@@ -1646,9 +1895,10 @@ export default function Debitos() {
                           {(() => {
                             const docs: { stageName: string; key: string; files: any[] }[] = [
                               { stageName: '1. Notificação de Débito', key: 'notificacao', files: editingDebito?.anexos?.notificacao || [] },
-                              { stageName: '2. Envio para Protesto', key: 'protesto', files: editingDebito?.anexos?.protesto || [] },
-                              { stageName: '3. Comunicação CADIN', key: 'comunicacaoCadin', files: editingDebito?.anexos?.comunicacaoCadin || [] },
-                              { stageName: '4. Registro no CADIN', key: 'cadin', files: editingDebito?.anexos?.cadin || [] }
+                              { stageName: '2. Inscrição em Dívida Ativa', key: 'dividaAtiva', files: editingDebito?.anexos?.dividaAtiva || [] },
+                              { stageName: '3. Envio para Protesto', key: 'protesto', files: editingDebito?.anexos?.protesto || [] },
+                              { stageName: '4. Comunicação CADIN', key: 'comunicacaoCadin', files: editingDebito?.anexos?.comunicacaoCadin || [] },
+                              { stageName: '5. Registro no CADIN', key: 'cadin', files: editingDebito?.anexos?.cadin || [] }
                             ];
                             const totalUploaded = docs.reduce((acc, curr) => acc + curr.files.length, 0);
 
@@ -1835,6 +2085,7 @@ export default function Debitos() {
                   <option value="">Todas as Fases</option>
                   <option value="Aguardando Notificação">Aguardando Notificação</option>
                   <option value="Notificação">Notificação</option>
+                  <option value="Dívida Ativa">Dívida Ativa</option>
                   <option value="Protesto">Protesto</option>
                   <option value="Comunicação CADIN">Comunicação CADIN</option>
                   <option value="Aguardando inclusão CADIN">Aguardando inclusão CADIN</option>
@@ -1907,6 +2158,16 @@ export default function Debitos() {
                       </td>
                       <td className="px-8 py-5">
                         <span className="font-serif font-black text-crb-navy text-xs">{statusInfo.fase}</span>
+                        {item.numeroCDA && (
+                          <span className="text-[9px] font-mono font-bold text-amber-800 block mt-0.5">
+                            CDA: {item.numeroCDA}
+                          </span>
+                        )}
+                        {statusInfo.aviso && (
+                          <span className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 border border-amber-200 text-amber-800 block w-fit" title={statusInfo.aviso}>
+                            ⚠️ {statusInfo.aviso}
+                          </span>
+                        )}
                       </td>
                       <td className="px-8 py-5">
                         <div className="flex flex-col gap-1">
