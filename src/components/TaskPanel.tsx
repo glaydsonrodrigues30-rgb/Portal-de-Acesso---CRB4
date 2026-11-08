@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Debito, Notificacao } from '../types';
-import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
+import { getStatusDebito, parseDateSafely, addDays, formatDateBR } from '../lib/statusDebito';
 import { 
   Clock, 
   Calendar, 
@@ -142,7 +142,22 @@ export default function TaskPanel({
           };
           actionLog = 'NOTIFICACAO_REGISTRADA';
           break;
-        case 'divida_ativa':
+        case 'divida_ativa': {
+          if (!executingTask.debito.notificacaoEnviada || !executingTask.debito.dataNotificacao) {
+            alert('Não é permitido registrar inscrição em Dívida Ativa sem notificação prévia e decurso do prazo regulamentar de 30 dias (Res. 259 CFB).');
+            setSubmitting(false);
+            return;
+          }
+          const notifDate = parseDateSafely(executingTask.debito.dataNotificacao);
+          const selDate = parseDateSafely(selectedDate);
+          if (notifDate && selDate) {
+            const prazoFinal30 = addDays(notifDate, 30);
+            if (selDate < prazoFinal30) {
+              alert(`A data de inscrição em Dívida Ativa (${formatDateBR(selDate)}) não pode ser anterior ao término do prazo de 30 dias da notificação (disponível a partir de ${formatDateBR(prazoFinal30)}).`);
+              setSubmitting(false);
+              return;
+            }
+          }
           updatedFields = {
             dividaAtivaInscrita: true,
             dataInscricaoDividaAtiva: selectedDate,
@@ -150,6 +165,7 @@ export default function TaskPanel({
           };
           actionLog = 'INSCRICAO_DIVIDA_ATIVA_REGISTRADA';
           break;
+        }
         case 'protesto':
           if (!executingTask.debito.dataInscricaoDividaAtiva) {
             alert('Não é permitido marcar o envio ao cartório sem a data de inscrição em Dívida Ativa preenchida. Conforme a Resolução 259 do CFB, o débito deve estar previamente inscrito em Dívida Ativa.');

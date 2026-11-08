@@ -44,7 +44,7 @@ import {
 import { formatCurrency, formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
-import { getStatusDebito, parseDateSafely } from '../lib/statusDebito';
+import { getStatusDebito, parseDateSafely, addDays, formatDateBR } from '../lib/statusDebito';
 import TaskPanel from '../components/TaskPanel';
 
 export default function Debitos() {
@@ -197,6 +197,23 @@ export default function Debitos() {
       if (!pag || !pag.data || !pag.formaPagamento) {
         alert('Por favor, informe a data e a forma de pagamento.');
         return;
+      }
+    }
+
+    // Validação Resolução 259 CFB: inscrição em Dívida Ativa só permitida após o fim do prazo de 30 dias da notificação
+    if (editingDebito.dataInscricaoDividaAtiva || editingDebito.dividaAtivaInscrita) {
+      if (!editingDebito.notificacaoEnviada || !editingDebito.dataNotificacao) {
+        alert('Não é permitido registrar inscrição em Dívida Ativa sem notificação prévia e decurso do prazo regulamentar de 30 dias (Res. 259 CFB).');
+        return;
+      }
+      const notifDate = parseDateSafely(editingDebito.dataNotificacao);
+      const inscricaoDate = parseDateSafely(editingDebito.dataInscricaoDividaAtiva);
+      if (notifDate && inscricaoDate) {
+        const prazoFinal30 = addDays(notifDate, 30);
+        if (inscricaoDate < prazoFinal30) {
+          alert(`A data de inscrição em Dívida Ativa (${formatDateBR(inscricaoDate)}) não pode ser anterior ao término do prazo de 30 dias da notificação (disponível a partir de ${formatDateBR(prazoFinal30)}).`);
+          return;
+        }
       }
     }
 
@@ -647,6 +664,17 @@ export default function Debitos() {
                 {editingDebito && editingDebito.id && (() => {
                   const statusInfo = getStatusDebito(editingDebito as any, notifications);
                   const todayStr = new Date().toISOString().split('T')[0];
+                  const notifDate = parseDateSafely(editingDebito.dataNotificacao);
+                  const prazoFinalNotif30 = notifDate ? addDays(notifDate, 30) : null;
+                  const todayZero = new Date();
+                  todayZero.setHours(0, 0, 0, 0);
+                  const isPrazo30Esgotado = Boolean(
+                    editingDebito.notificacaoEnviada &&
+                    notifDate &&
+                    prazoFinalNotif30 &&
+                    todayZero > prazoFinalNotif30
+                  );
+                  const dataLiberacaoDividaAtivaStr = prazoFinalNotif30 ? formatDateBR(prazoFinalNotif30) : '-';
 
                   const diasRestantesProtesto = (() => {
                     if (!editingDebito.protestoEnviado || !editingDebito.dataProtesto) return 0;
@@ -858,7 +886,7 @@ export default function Debitos() {
                           <div className={cn(
                             "bg-white p-4 rounded-xl border flex flex-col justify-between space-y-3 shadow-xs",
                             (editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) ? "border-amber-300 bg-amber-50/10" : "border-slate-100",
-                            (!editingDebito.notificacaoEnviada && !isReadOnly) ? "opacity-60 bg-slate-50/50" : ""
+                            ((!editingDebito.notificacaoEnviada || !isPrazo30Esgotado) && !(editingDebito.dividaAtivaInscrita || editingDebito.dataInscricaoDividaAtiva) && !isReadOnly) ? "opacity-90 bg-slate-50/50" : ""
                           )}>
                             <div>
                               <div className="flex items-center gap-1.5">
@@ -884,9 +912,17 @@ export default function Debitos() {
                                   )}
                                 </div>
                               ) : (
-                                <p className="text-[11px] text-slate-400 font-medium leading-relaxed mt-1">
-                                  Obrigatório antes do cartório (Res. 259 CFB). Realizada após 30 dias de notificação.
-                                </p>
+                                <div className="space-y-1.5 mt-1">
+                                  <p className="text-[11px] text-slate-400 font-medium leading-relaxed">
+                                    Obrigatório antes do cartório (Res. 259 CFB). Realizada após o prazo de 30 dias da notificação.
+                                  </p>
+                                  {editingDebito.notificacaoEnviada && !isPrazo30Esgotado && (
+                                    <div className="bg-amber-50 border border-amber-200 text-amber-900 text-[11px] font-bold p-2.5 rounded-xl flex items-center gap-2">
+                                      <Clock size={14} className="text-amber-700 shrink-0" />
+                                      <span>Disponível após o prazo de 30 dias da notificação (em {dataLiberacaoDividaAtivaStr})</span>
+                                    </div>
+                                  )}
+                                </div>
                               )}
 
                               {/* Divida Ativa Attachments list */}
@@ -972,27 +1008,36 @@ export default function Debitos() {
                                       <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">Data Inscrição</label>
                                       <input 
                                         type="date"
-                                        disabled={!editingDebito.notificacaoEnviada}
+                                        disabled={!editingDebito.notificacaoEnviada || !isPrazo30Esgotado}
                                         value={tempDividaAtivaDate}
                                         onChange={(e) => setTempDividaAtivaDate(e.target.value)}
-                                        className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                        className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40 disabled:bg-slate-100 disabled:cursor-not-allowed"
                                       />
                                     </div>
                                     <div>
                                       <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block mb-0.5">Nº CDA (Opcional)</label>
                                       <input 
                                         type="text"
-                                        disabled={!editingDebito.notificacaoEnviada}
+                                        disabled={!editingDebito.notificacaoEnviada || !isPrazo30Esgotado}
                                         placeholder="Ex: CDA-2026/001"
                                         value={tempNumeroCDA}
                                         onChange={(e) => setTempNumeroCDA(e.target.value)}
-                                        className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40"
+                                        className="w-full text-xs p-1.5 border border-slate-200 rounded-lg outline-none font-sans font-bold text-crb-navy focus:border-crb-purple disabled:opacity-40 disabled:bg-slate-100 disabled:cursor-not-allowed"
                                       />
                                     </div>
                                     <button
                                       type="button"
-                                      disabled={!editingDebito.notificacaoEnviada}
+                                      disabled={!editingDebito.notificacaoEnviada || !isPrazo30Esgotado}
                                       onClick={() => {
+                                        if (!isPrazo30Esgotado) {
+                                          alert(`Disponível após o prazo de 30 dias da notificação (em ${dataLiberacaoDividaAtivaStr})`);
+                                          return;
+                                        }
+                                        const inscricaoD = parseDateSafely(tempDividaAtivaDate || todayStr);
+                                        if (prazoFinalNotif30 && inscricaoD && inscricaoD < prazoFinalNotif30) {
+                                          alert(`A data de inscrição em Dívida Ativa (${formatDateBR(inscricaoD)}) não pode ser anterior ao término do prazo de 30 dias da notificação (disponível a partir de ${dataLiberacaoDividaAtivaStr}).`);
+                                          return;
+                                        }
                                         setEditingDebito({
                                           ...editingDebito,
                                           dividaAtivaInscrita: true,
@@ -1001,7 +1046,13 @@ export default function Debitos() {
                                           dividaAtivaResponsavel: userData?.nome || userData?.email || 'Sistema'
                                         });
                                       }}
-                                      title={!editingDebito.notificacaoEnviada ? "Inscrição só permitida após notificação" : "Inscrever débito em Dívida Ativa"}
+                                      title={
+                                        !editingDebito.notificacaoEnviada
+                                          ? "Inscrição só permitida após notificação"
+                                          : !isPrazo30Esgotado
+                                            ? `Disponível após o prazo de 30 dias da notificação (em ${dataLiberacaoDividaAtivaStr})`
+                                            : "Inscrever débito em Dívida Ativa"
+                                      }
                                       className="w-full text-[10px] text-white bg-amber-600 hover:bg-amber-700 py-2 px-3 rounded-lg font-bold uppercase tracking-wider transition-colors disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed"
                                     >
                                       ✓ Inscrever em Dívida Ativa

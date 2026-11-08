@@ -166,7 +166,7 @@ export function formatDateISO(date: Date | null): string | null {
 /**
  * Adiciona N dias inteiros a uma data.
  */
-function addDays(date: Date, days: number): Date {
+export function addDays(date: Date, days: number): Date {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   result.setHours(0, 0, 0, 0);
@@ -176,7 +176,7 @@ function addDays(date: Date, days: number): Date {
 /**
  * Calcula diferença em dias inteiros entre duas datas (d1 - d2).
  */
-function diffDays(d1: Date, d2: Date): number {
+export function diffDays(d1: Date, d2: Date): number {
   const ms1 = Date.UTC(d1.getFullYear(), d1.getMonth(), d1.getDate());
   const ms2 = Date.UTC(d2.getFullYear(), d2.getMonth(), d2.getDate());
   return Math.round((ms1 - ms2) / (1000 * 60 * 60 * 24));

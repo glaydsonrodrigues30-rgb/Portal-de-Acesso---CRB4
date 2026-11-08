@@ -23,6 +23,7 @@ import { collection, doc, writeBatch, getDocs } from 'firebase/firestore';
 import { useAuth } from '../lib/AuthContext';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { parseDateSafely, addDays, formatDateBR } from '../lib/statusDebito';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -614,6 +615,27 @@ export default function Importacao() {
         if (parsedComCadin.warning) rowWarnings.push(`Comunicação CADIN: ${parsedComCadin.warning}`);
         const parsedCadin = parseDataFlex(rawDataCadin);
         if (parsedCadin.warning) rowWarnings.push(`CADIN: ${parsedCadin.warning}`);
+
+        // Validação Dívida Ativa (Res. 259 CFB): inscrição só após 30 dias da notificação
+        if (parsedDividaAtiva.iso) {
+          if (!parsedNotif.iso) {
+            rowWarnings.push('Dívida Ativa: registro de inscrição sem data de notificação prévia (Res. 259 CFB).');
+          } else {
+            const notifD = parseDateSafely(parsedNotif.iso);
+            const dividaD = parseDateSafely(parsedDividaAtiva.iso);
+            if (notifD && dividaD) {
+              const prazo30 = addDays(notifD, 30);
+              if (dividaD < prazo30) {
+                rowWarnings.push(`Dívida Ativa: data de inscrição (${formatDateBR(dividaD)}) é anterior ao encerramento do prazo de 30 dias da notificação (em ${formatDateBR(prazo30)}).`);
+              }
+            }
+          }
+        }
+
+        // Validação Cartório (Res. 259 CFB): envio ao cartório exige inscrição em Dívida Ativa
+        if (parsedProtesto.iso && !parsedDividaAtiva.iso) {
+          rowWarnings.push('Cartório/Protesto: envio a protesto sem prévia inscrição em Dívida Ativa (Res. 259 CFB).');
+        }
 
         // Chave Natural Débito: CRB + exercicio + origem
         const cleanCrbKey = sanitizeKey(crbClean);
