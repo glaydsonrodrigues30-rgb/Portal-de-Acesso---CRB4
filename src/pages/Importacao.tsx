@@ -24,6 +24,7 @@ import { useAuth } from '../lib/AuthContext';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { parseDateSafely, addDays, formatDateBR } from '../lib/statusDebito';
+import { clearSessionCache } from '../lib/sessionCache';
 
 const CURRENT_YEAR = new Date().getFullYear();
 
@@ -1316,6 +1317,7 @@ export default function Importacao() {
       ignoradasSeparadores: stats.ignoradasSeparadores
     });
 
+    clearSessionCache();
     setStatus('finished');
   };
 

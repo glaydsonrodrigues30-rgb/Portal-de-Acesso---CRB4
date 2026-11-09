@@ -7,7 +7,9 @@ import {
   updateDoc, 
   deleteDoc,
   setDoc,
-  orderBy
+  orderBy,
+  where,
+  limit
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, logAuditoria } from '../lib/firebase';
 import { Oficio } from '@/src/types';
@@ -24,10 +26,12 @@ import {
   RefreshCw,
   Sparkles,
   Layers,
-  Filter
+  Filter,
+  AlertTriangle
 } from 'lucide-react';
 import { formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
+import { getSessionCache, setSessionCache, clearSessionCache } from '../lib/sessionCache';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   getAnoDe, 
@@ -105,12 +109,42 @@ export default function Oficios() {
     });
   };
 
-  const fetchOficios = async () => {
+  const fetchOficios = async (forceRefresh = false) => {
     setLoading(true);
     try {
-      const q = query(collection(db, 'oficios'), orderBy('dataEnvio', 'desc'));
+      const isAll = !searchAno || searchAno === 'TODOS';
+      const cacheKey = `oficios_${isAll ? 'todos' : searchAno}`;
+
+      if (!forceRefresh) {
+        const cached = getSessionCache<Oficio[]>(cacheKey);
+        if (cached) {
+          setOficios(cached);
+          setLoading(false);
+          return;
+        }
+      }
+
+      let q;
+      if (!isAll) {
+        // Query com where no campo de ano para carregar apenas o exercício selecionado
+        q = query(
+          collection(db, 'oficios'),
+          where('ano', '==', Number(searchAno))
+        );
+      } else {
+        // Opção "Todos os anos": mantida com paginação limitada a 50
+        q = query(
+          collection(db, 'oficios'),
+          orderBy('dataEnvio', 'desc'),
+          limit(50)
+        );
+      }
+
       const snap = await getDocs(q);
-      setOficios(snap.docs.map(d => ({ id: d.id, ...d.data() })) as Oficio[]);
+      const data = snap.docs.map(d => ({ id: d.id, ...(d.data() as Record<string, any>) })) as Oficio[];
+      data.sort(compararNumeroDesc);
+      setSessionCache(cacheKey, data);
+      setOficios(data);
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, 'oficios');
     } finally {
@@ -118,7 +152,9 @@ export default function Oficios() {
     }
   };
 
-  useEffect(() => { fetchOficios(); }, []);
+  useEffect(() => {
+    fetchOficios();
+  }, [searchAno]);
 
   // Lista dinâmica de anos a partir dos dados existentes
   const availableYears = useMemo(() => {
@@ -226,7 +262,8 @@ export default function Oficios() {
       }
 
       setIsModalOpen(false);
-      fetchOficios();
+      clearSessionCache('oficios_');
+      fetchOficios(true);
     } catch (err) {
       alert('Erro ao salvar ofício.');
       handleFirestoreError(err, OperationType.WRITE, 'oficios');
@@ -240,6 +277,7 @@ export default function Oficios() {
     try {
       await deleteDoc(doc(db, 'oficios', id));
       await logAuditoria('EXCLUSAO', 'OFICIOS', id);
+      clearSessionCache('oficios_');
       setOficios(prev => prev.filter(o => o.id !== id));
       alert('Ofício excluído com sucesso!');
     } catch (err) {
@@ -286,16 +324,33 @@ export default function Oficios() {
             Controle de correspondências oficiais enviadas ({searchAno === 'TODOS' || !searchAno ? 'Todos os Anos' : `Exercício ${searchAno}`}).
           </p>
         </div>
-        {(isAdmin || isOperacional) && (
+        <div className="flex items-center gap-3">
           <button 
-            onClick={handleOpenNovoOficio}
-            className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide cursor-pointer"
+            onClick={() => fetchOficios(true)}
+            className="flex items-center gap-2 px-5 py-3 border border-slate-200 bg-white text-crb-navy hover:bg-slate-50 hover:border-crb-purple rounded-2xl font-bold text-sm tracking-wide transition-all cursor-pointer shadow-sm"
+            title="Atualizar dados do exercício (ignorar cache)"
           >
-            <Plus size={20} className="text-white" />
-            Novo Ofício
+            <RefreshCw size={16} className={loading ? "animate-spin text-crb-purple" : "text-crb-navy"} />
+            <span>Atualizar</span>
           </button>
-        )}
+          {(isAdmin || isOperacional) && (
+            <button 
+              onClick={handleOpenNovoOficio}
+              className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide cursor-pointer"
+            >
+              <Plus size={20} className="text-white" />
+              Novo Ofício
+            </button>
+          )}
+        </div>
       </div>
+
+      {(!searchAno || searchAno === 'TODOS') && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-3 rounded-xl flex items-center gap-2.5 font-medium">
+          <AlertTriangle size={16} className="text-amber-700 shrink-0" />
+          <span>Atenção: A consulta em "Todos os anos" consome mais leituras da cota diária do Firebase. Prefira filtrar por exercício específico. Paginação limitada a 50 registros.</span>
+        </div>
+      )}
 
       {/* Barra de Filtros */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">

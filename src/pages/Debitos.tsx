@@ -39,13 +39,17 @@ import {
   Paperclip,
   Calendar,
   User,
-  File
+  File,
+  RefreshCw
 } from 'lucide-react';
 import { formatCurrency, formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { getStatusDebito, parseDateSafely, addDays, formatDateBR } from '../lib/statusDebito';
+import { getSessionCache, setSessionCache, clearSessionCache } from '../lib/sessionCache';
 import TaskPanel from '../components/TaskPanel';
+
+const CURRENT_YEAR = new Date().getFullYear();
 
 export default function Debitos() {
   const { userData, isAdmin, isOperacional } = useAuth();
@@ -57,7 +61,7 @@ export default function Debitos() {
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchCRB, setSearchCRB] = useState('');
-  const [searchAno, setSearchAno] = useState('');
+  const [searchAno, setSearchAno] = useState<string>(CURRENT_YEAR.toString());
   const [showFilters, setShowFilters] = useState(false);
   
   const [editingDebito, setEditingDebito] = useState<Partial<Debito> | null>(null);
@@ -153,29 +157,63 @@ export default function Debitos() {
 
   const pageSize = 50;
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = async (forceRefresh = false) => {
     try {
+      if (!forceRefresh) {
+        const cached = getSessionCache<any[]>('notifications_cache');
+        if (cached) {
+          setNotifications(cached);
+          return;
+        }
+      }
       const snapshot = await getDocs(collection(db, 'notifications'));
       const notifs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setSessionCache('notifications_cache', notifs);
       setNotifications(notifs);
     } catch (err) {
       console.error("Erro ao carregar notificações para fluxo:", err);
     }
   };
 
-  const fetchDebitos = async () => {
+  const fetchDebitos = async (forceRefresh = false) => {
     setLoading(true);
     try {
-      const q = query(
-        collection(db, 'debits'),
-        orderBy('crb'),
-        orderBy('ano', 'desc'),
-        limit(pageSize)
-      );
+      const isAll = !searchAno || searchAno === 'todos';
+      const cacheKey = `debitos_${isAll ? 'todos' : searchAno}_p${page}`;
+
+      if (!forceRefresh) {
+        const cached = getSessionCache<Debito[]>(cacheKey);
+        if (cached) {
+          setDebitos(cached);
+          setLoading(false);
+          return;
+        }
+      }
+
+      let q;
+      if (!isAll) {
+        // Query com where no campo de ano para carregar apenas o exercício selecionado
+        q = query(
+          collection(db, 'debits'),
+          where('ano', '==', Number(searchAno))
+        );
+      } else {
+        // Opção "Todos os anos": mantida com paginação de 50 em 50
+        q = query(
+          collection(db, 'debits'),
+          orderBy('crb'),
+          limit(pageSize)
+        );
+      }
+
       const snapshot = await getDocs(q);
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Debito[];
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...(doc.data() as Record<string, any>) })) as Debito[];
+      data.sort((a, b) => a.crb.localeCompare(b.crb) || b.ano - a.ano);
+      setSessionCache(cacheKey, data);
       setDebitos(data);
-      setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
+      if (snapshot.docs.length > 0) {
+        setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, 'debits');
     } finally {
@@ -185,8 +223,11 @@ export default function Debitos() {
 
   useEffect(() => {
     fetchNotifications();
-    fetchDebitos();
   }, []);
+
+  useEffect(() => {
+    fetchDebitos();
+  }, [searchAno, page]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -281,7 +322,8 @@ export default function Debitos() {
         alert('Débito registrado com sucesso!');
       }
 
-      await fetchDebitos();
+      clearSessionCache('debitos_');
+      await fetchDebitos(true);
       setIsModalOpen(false);
       setEditingDebito(null);
     } catch (err) {
@@ -2087,9 +2129,17 @@ export default function Debitos() {
             />
           </div>
           <button 
+            onClick={() => fetchDebitos(true)}
+            className="flex items-center gap-2 px-5 py-3 border border-slate-200 bg-white text-crb-navy hover:bg-slate-50 hover:border-crb-purple rounded-xl font-bold text-sm tracking-wide transition-all cursor-pointer shadow-xs"
+            title="Atualizar dados do exercício (ignorar cache)"
+          >
+            <RefreshCw size={16} className={loading ? "animate-spin text-crb-purple" : "text-crb-navy"} />
+            <span>Atualizar</span>
+          </button>
+          <button 
             onClick={() => setShowFilters(!showFilters)}
             className={cn(
-              "flex items-center gap-2 px-6 py-3 border rounded-xl font-bold text-sm tracking-wide transition-all",
+              "flex items-center gap-2 px-6 py-3 border rounded-xl font-bold text-sm tracking-wide transition-all cursor-pointer",
               showFilters ? "bg-crb-navy text-white border-crb-navy" : "bg-white text-crb-navy border-slate-200 hover:border-crb-purple hover:bg-slate-50"
             )}
           >
@@ -2097,6 +2147,13 @@ export default function Debitos() {
             Filtros Avançados
           </button>
         </div>
+
+        {(!searchAno || searchAno === 'todos') && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-3 rounded-xl flex items-center gap-2.5 font-medium">
+            <AlertTriangle size={16} className="text-amber-700 shrink-0" />
+            <span>Atenção: A consulta em "Todos os anos" consome mais leituras da cota diária do Firebase. Prefira filtrar por exercício específico. Paginação limitada a 50 registros por página.</span>
+          </div>
+        )}
 
         <AnimatePresence>
           {showFilters && (
@@ -2117,14 +2174,20 @@ export default function Debitos() {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ano do Exercício</label>
-                <input 
-                  type="number" 
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Exercício (Ano)</label>
+                <select 
                   value={searchAno}
-                  onChange={(e) => setSearchAno(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-crb-purple focus:border-crb-navy transition-all font-medium"
-                  placeholder="2024"
-                />
+                  onChange={(e) => { setSearchAno(e.target.value); setPage(1); }}
+                  className="w-full px-4 py-2.5 border border-slate-200 bg-white rounded-xl outline-none focus:ring-2 focus:ring-crb-purple focus:border-crb-navy transition-all font-bold text-xs text-crb-navy cursor-pointer"
+                >
+                  <option value={CURRENT_YEAR.toString()}>{CURRENT_YEAR} (Exercício Atual)</option>
+                  <option value={(CURRENT_YEAR - 1).toString()}>{CURRENT_YEAR - 1}</option>
+                  <option value={(CURRENT_YEAR - 2).toString()}>{CURRENT_YEAR - 2}</option>
+                  <option value={(CURRENT_YEAR - 3).toString()}>{CURRENT_YEAR - 3}</option>
+                  <option value={(CURRENT_YEAR - 4).toString()}>{CURRENT_YEAR - 4}</option>
+                  <option value={(CURRENT_YEAR - 5).toString()}>{CURRENT_YEAR - 5}</option>
+                  <option value="todos">Todos os anos (maior consumo)</option>
+                </select>
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fase do Fluxo</label>
@@ -2293,6 +2356,7 @@ export default function Debitos() {
                                 console.log("Excluído do Firestore com sucesso");
                                 
                                 // Atualização imediata da UI
+                                clearSessionCache('debitos_');
                                 setDebitos(prev => prev.filter(d => d.id !== item.id));
                                 alert("Débito excluído com sucesso");
                                 

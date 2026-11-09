@@ -9,11 +9,14 @@ import ProcessosView from '../components/dashboards/ProcessosView';
 import { 
   BarChart3, CreditCard, Mail, FileText, FolderOpen, Settings2 
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '../lib/AuthContext';
 import { cn } from '../lib/utils';
 
 type DashboardTab = 'geral' | 'debitos' | 'oficios' | 'processos';
 
 export default function Dashboard() {
+  const { userData } = useAuth();
   const [activeTab, setActiveTab] = useState<DashboardTab>('geral');
 
   const goToTab = (tab: DashboardTab) => setActiveTab(tab);
@@ -37,6 +40,22 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-7xl mx-auto w-full px-4 md:px-8 pb-20 space-y-8 overflow-x-hidden">
+      {/* Aviso discreto enquanto não tiver e-mail confirmado */}
+      {userData?.email?.endsWith('@crb4.local') && (
+        <div className="bg-amber-50/90 border border-amber-200/90 text-amber-900 px-4 py-3 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-medium shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <Mail size={16} className="text-amber-700 shrink-0" />
+            <span>Cadastre seu e-mail para poder recuperar a senha.</span>
+          </div>
+          <Link 
+            to="/meu-cadastro" 
+            className="text-amber-800 hover:text-amber-950 font-bold underline shrink-0 transition-colors"
+          >
+            Cadastrar agora &rarr;
+          </Link>
+        </div>
+      )}
+
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 border-b-2 border-slate-200/60 pb-8 mt-4">
         <div className="flex items-center gap-6">
           <img src="https://i.postimg.cc/CLwGjkqN/logo.png" alt="CRB-4 Logo" className="h-16 hidden md:block drop-shadow-sm" />

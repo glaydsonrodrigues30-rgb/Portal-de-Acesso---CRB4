@@ -13,6 +13,7 @@ import {
   History,
   Menu,
   FolderOpen,
+  UserCheck,
   X
 } from 'lucide-react';
 import { useAuth } from '../lib/AuthContext';
@@ -113,6 +114,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <SidebarItem to="/oficios" icon={FileText} label="Ofícios Expedidos" onClick={() => setIsMobileMenuOpen(false)} />
           <SidebarItem to="/processos" icon={FolderOpen} label="Processos" onClick={() => setIsMobileMenuOpen(false)} />
           <SidebarItem to="/relatorios" icon={Files} label="Relatórios" onClick={() => setIsMobileMenuOpen(false)} />
+          <SidebarItem to="/meu-cadastro" icon={UserCheck} label="Meu Cadastro" onClick={() => setIsMobileMenuOpen(false)} />
           
           {isAdmin && (
             <div className="pt-6 mt-6 border-t border-white/10 space-y-2">

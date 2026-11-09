@@ -106,10 +106,23 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "acao", "modulo", "timestamp"]
+    },
+    "Username": {
+      "title": "Mapeamento de Usuário",
+      "description": "Mapeamento público de username para e-mail institucional e UID para autenticação",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "uid": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "email", "uid"]
     }
   },
   "firestore": {
     "/users/{userId}": { "schema": "User", "description": "Coleção de usuários" },
+    "/usernames/{username}": { "schema": "Username", "description": "Mapeamento de usernames para e-mails de acesso" },
     "/debits/{debitoId}": { "schema": "Debito", "description": "Coleção de débitos" },
     "/notifications/{notificacaoId}": { "schema": "Notificacao", "description": "Coleção de notificações" },
     "/negotiations/{negociacaoId}": { "schema": "Negociacao", "description": "Coleção de negociações" },

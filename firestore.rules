@@ -49,6 +49,15 @@ service cloud.firestore {
       return hasValidProfile() && (getUserRole() == 'OPERACIONAL' || isAdmin());
     }
 
+    // --- Usernames Mapping Collection ---
+    // Permite get público para resolução de login por nome de usuário; proíbe listagem pública
+    match /usernames/{username} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if (isAdmin() || (isSignedIn() && request.resource.data.uid == request.auth.uid));
+      allow delete: if isAdmin();
+    }
+
     // --- Users Collection ---
     match /users/{userId} {
       // Authenticated users with valid profile can read user records
@@ -60,9 +69,11 @@ service cloud.firestore {
       allow create: if (isAdmin() && request.resource.data.perfil in ['ADMIN', 'OPERACIONAL', 'VISUALIZADOR'])
                    || (isSignedIn() && request.auth.uid == userId && isGlaydsonAdmin() && request.resource.data.perfil == 'ADMIN');
 
-      // Only an existing admin can update user documents
-      allow update: if isAdmin()
-                   && request.resource.data.perfil in ['ADMIN', 'OPERACIONAL', 'VISUALIZADOR'];
+      // Admin can update any user; user can update their own non-privilege profile data (e.g. precisaTrocarSenha, email, nome)
+      allow update: if (isAdmin() && request.resource.data.perfil in ['ADMIN', 'OPERACIONAL', 'VISUALIZADOR'])
+                   || (isSignedIn() && request.auth.uid == userId 
+                       && request.resource.data.perfil == resource.data.perfil 
+                       && request.resource.data.status == resource.data.status);
 
       // Only admin can delete users, and cannot delete themselves
       allow delete: if isAdmin() && userId != request.auth.uid;

@@ -14,15 +14,22 @@ import Relatorios from './pages/Relatorios';
 import Usuarios from './pages/Usuarios';
 import Importacao from './pages/Importacao';
 import Auditoria from './pages/Auditoria';
+import MeuCadastro from './pages/MeuCadastro';
+import PrimeiroAcessoModal from './components/PrimeiroAcessoModal';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { currentUser, userData, loading } = useAuth();
+  const { currentUser, userData, loading, precisaTrocarSenha } = useAuth();
 
-  if (loading) return <div className="flex items-center justify-center h-screen">Carregando...</div>;
+  if (loading) return <div className="flex items-center justify-center h-screen font-sans text-slate-500 font-bold">Carregando...</div>;
   if (!currentUser) return <Navigate to="/login" />;
   if (userData?.status === 'INATIVO') return <Navigate to="/login" />;
 
-  return <Layout>{children}</Layout>;
+  return (
+    <>
+      {precisaTrocarSenha && <PrimeiroAcessoModal />}
+      <Layout>{children}</Layout>
+    </>
+  );
 }
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
@@ -45,6 +52,7 @@ export default function App() {
           <Route path="/oficios" element={<ProtectedRoute><Oficios /></ProtectedRoute>} />
           <Route path="/processos" element={<ProtectedRoute><Processos /></ProtectedRoute>} />
           <Route path="/relatorios" element={<ProtectedRoute><Relatorios /></ProtectedRoute>} />
+          <Route path="/meu-cadastro" element={<ProtectedRoute><MeuCadastro /></ProtectedRoute>} />
           
           {/* Admin Routes */}
           <Route path="/usuarios" element={

@@ -7,7 +7,9 @@ import {
   updateDoc, 
   deleteDoc,
   setDoc,
-  orderBy
+  orderBy,
+  where,
+  limit
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType, logAuditoria } from '../lib/firebase';
 import { Processo } from '@/src/types';
@@ -24,10 +26,12 @@ import {
   RefreshCw,
   Sparkles,
   Layers,
-  Filter
+  Filter,
+  AlertTriangle
 } from 'lucide-react';
 import { formatDate, cn, openAttachment } from '../lib/utils';
 import { useAuth } from '../lib/AuthContext';
+import { getSessionCache, setSessionCache, clearSessionCache } from '../lib/sessionCache';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   getAnoDe, 
@@ -106,12 +110,39 @@ export default function Processos() {
     });
   };
 
-  const fetchProcessos = async () => {
+  const fetchProcessos = async (forceRefresh = false) => {
+    const cacheKey = `processos_${searchAno || 'todos'}`;
+    if (!forceRefresh) {
+      const cached = getSessionCache<Processo[]>(cacheKey);
+      if (cached && cached.length > 0) {
+        setProcessos(cached);
+        setLoading(false);
+        return;
+      }
+    }
+
     setLoading(true);
     try {
-      const q = query(collection(db, 'processos'), orderBy('dataSolicitacao', 'desc'));
+      let q;
+      if (searchAno && searchAno !== 'TODOS') {
+        const anoNum = Number(searchAno);
+        q = query(
+          collection(db, 'processos'),
+          where('ano', '==', anoNum)
+        );
+      } else {
+        // Paginação limitada a 50 itens para economizar leituras do Firebase Spark
+        q = query(
+          collection(db, 'processos'),
+          orderBy('dataSolicitacao', 'desc'),
+          limit(50)
+        );
+      }
+
       const snap = await getDocs(q);
-      setProcessos(snap.docs.map(d => ({ id: d.id, ...d.data() })) as Processo[]);
+      const list = (snap.docs.map(d => ({ id: d.id, ...(d.data() as Record<string, any>) })) as Processo[]).sort(compararNumeroDesc);
+      setProcessos(list);
+      setSessionCache(cacheKey, list);
     } catch (err) {
       handleFirestoreError(err, OperationType.LIST, 'processos');
     } finally {
@@ -119,7 +150,7 @@ export default function Processos() {
     }
   };
 
-  useEffect(() => { fetchProcessos(); }, []);
+  useEffect(() => { fetchProcessos(); }, [searchAno]);
 
   // Anos disponíveis dinamicamente
   const availableYears = useMemo(() => {
@@ -217,7 +248,8 @@ export default function Processos() {
       }
 
       setIsModalOpen(false);
-      fetchProcessos();
+      clearSessionCache('processos_');
+      fetchProcessos(true);
     } catch (err) {
       alert('Erro ao salvar processo.');
       handleFirestoreError(err, OperationType.WRITE, 'processos');
@@ -231,6 +263,7 @@ export default function Processos() {
     try {
       await deleteDoc(doc(db, 'processos', id));
       await logAuditoria('EXCLUSAO', 'PROCESSOS', id);
+      clearSessionCache('processos_');
       setProcessos(prev => prev.filter(p => p.id !== id));
       alert('Processo excluído com sucesso!');
     } catch (err) {
@@ -275,16 +308,37 @@ export default function Processos() {
             Gestão de solicitações e registros administrativos para plenária ({searchAno === 'TODOS' || !searchAno ? 'Todos os Anos' : `Exercício ${searchAno}`}).
           </p>
         </div>
-        {(isAdmin || isOperacional) && (
-          <button 
-            onClick={handleOpenNovoProcesso}
-            className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide cursor-pointer"
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => fetchProcessos(true)}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold transition-all shadow-sm disabled:opacity-50 cursor-pointer"
+            title="Recarregar dados do servidor e atualizar cache"
           >
-            <Plus size={20} className="text-white" />
-            Novo Processo
+            <RefreshCw size={16} className={cn(loading && 'animate-spin text-crb-purple')} />
+            Atualizar
           </button>
-        )}
+          {(isAdmin || isOperacional) && (
+            <button 
+              onClick={handleOpenNovoProcesso}
+              className="flex items-center gap-2 bg-crb-purple text-white px-6 py-3 rounded-2xl hover:bg-crb-purple-light transition-all shadow-lg shadow-crb-purple/20 font-bold text-sm tracking-wide cursor-pointer"
+            >
+              <Plus size={20} className="text-white" />
+              Novo Processo
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Aviso de cota diária quando selecionado "Todos os anos" */}
+      {searchAno === 'TODOS' && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3 text-amber-800 text-xs">
+          <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-bold">Atenção ao consumo da cota gratuita do Firebase:</span> A consulta de &quot;Todos os anos&quot; consome mais leituras diárias do Firestore. Para máxima economia de cotas, recomendamos filtrar pelo exercício específico desejado. Os resultados estão limitados aos 50 registros mais recentes.
+          </div>
+        </div>
+      )}
 
       {/* Barra de Filtros */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">

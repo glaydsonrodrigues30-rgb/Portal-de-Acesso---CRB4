@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../lib/AuthContext';
-import { ShieldCheck, LogIn, Mail, Key, ArrowRight, X, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, LogIn, User, Key, ArrowRight, X, CheckCircle2, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 
 export default function Login() {
   const { login, resetPassword, userData, currentUser } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   // Modal "Esqueci minha senha"
   const [isResetOpen, setIsResetOpen] = useState(false);
-  const [resetEmail, setResetEmail] = useState('');
+  const [resetIdentifier, setResetIdentifier] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
@@ -27,34 +27,37 @@ export default function Login() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      setError('Por favor, informe seu e-mail e senha.');
+    if (!identifier || !password) {
+      setError('Por favor, informe seu usuário ou e-mail e sua senha.');
       return;
     }
     try {
       setError(null);
       setIsAuthenticating(true);
-      await login(email, password);
+      await login(identifier, password);
     } catch (err: any) {
-      setError(err.message || 'E-mail ou senha incorretos.');
-      console.error(err);
+      setError(err.message || 'Usuário/e-mail ou senha incorretos.');
       setIsAuthenticating(false);
     }
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resetEmail) {
-      setResetError('Por favor, informe seu e-mail institucional.');
+    if (!resetIdentifier) {
+      setResetError('Por favor, informe seu usuário ou e-mail cadastrado.');
       return;
     }
     try {
       setResetLoading(true);
       setResetError(null);
-      await resetPassword(resetEmail);
-      setResetSuccess(true);
+      const res = await resetPassword(resetIdentifier);
+      if (res.isInternal) {
+        setResetError('Nenhum e-mail cadastrado. Procure o administrador para redefinir sua senha.');
+      } else if (res.sent) {
+        setResetSuccess(true);
+      }
     } catch (err: any) {
-      setResetError(err.message || 'Erro ao enviar link de redefinição.');
+      setResetError(err.message || 'Erro ao processar solicitação de recuperação.');
     } finally {
       setResetLoading(false);
     }
@@ -74,7 +77,7 @@ export default function Login() {
           </div>
           <h2 className="text-3xl font-serif font-bold text-crb-navy mb-4">Acesso Restrito</h2>
           <p className="text-slate-500 mb-8 leading-relaxed font-medium">
-            Sua conta (<span className="text-crb-navy font-bold">{currentUser.email}</span>) está inativa ou pendente de homologação. Contate a administração do CRB-4.
+            Sua conta (<span className="text-crb-navy font-bold">{currentUser.username || currentUser.email}</span>) está inativa ou pendente de homologação. Contate a administração do CRB-4.
           </p>
           <button 
             onClick={() => window.location.reload()}
@@ -135,17 +138,21 @@ export default function Login() {
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">E-mail de Acesso</label>
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
+                Usuário ou E-mail
+              </label>
               <div className="relative">
-                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                 <input 
                   required
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  type="text"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
                   className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3.5 pl-12 pr-6 rounded-2xl focus:border-crb-blue outline-none transition-all placeholder:text-slate-400 text-sm"
-                  placeholder="nome.sobrenome@crb4.org.br"
-                  autoComplete="email"
+                  placeholder="usuario ou nome@crb4.org.br"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                 />
               </div>
             </div>
@@ -156,12 +163,12 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => {
-                    setResetEmail(email);
+                    setResetIdentifier(identifier);
                     setResetSuccess(false);
                     setResetError(null);
                     setIsResetOpen(true);
                   }}
-                  className="text-xs font-bold text-crb-blue hover:text-crb-navy transition-colors focus:outline-none"
+                  className="text-xs font-bold text-crb-blue hover:text-crb-navy transition-colors focus:outline-none cursor-pointer"
                 >
                   Esqueci minha senha
                 </button>
@@ -199,7 +206,7 @@ export default function Login() {
               Conselho Regional de Biblioteconomia - 4ª Região
             </p>
             <p className="text-[10px] text-slate-400 font-medium">
-              Acesso monitorado. Uso restrito a operadores e administradores autorizados.
+              Acesso restrito. Digite seu nome de usuário ou e-mail institucional para acessar.
             </p>
           </div>
         </motion.div>
@@ -229,7 +236,7 @@ export default function Login() {
 
               <h3 className="text-2xl font-serif font-bold text-crb-navy mb-2">Recuperar Senha</h3>
               <p className="text-sm text-slate-500 mb-6 font-medium">
-                Informe o seu e-mail institucional cadastrado. Enviaremos um link seguro para você definir uma senha forte no Firebase Authentication.
+                Informe o seu nome de usuário ou e-mail institucional. Se você possui e-mail cadastrado, enviaremos um link seguro de recuperação.
               </p>
 
               {resetSuccess ? (
@@ -237,9 +244,9 @@ export default function Login() {
                   <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5 text-emerald-800 flex items-start gap-3">
                     <CheckCircle2 size={24} className="text-emerald-600 shrink-0 mt-0.5" />
                     <div className="text-sm">
-                      <p className="font-bold mb-1">E-mail de redefinição enviado!</p>
+                      <p className="font-bold mb-1">Link de redefinição enviado!</p>
                       <p className="text-emerald-700 leading-relaxed">
-                        Verifique a caixa de entrada (e a pasta de spam) de <strong>{resetEmail}</strong> e siga o link para definir sua nova senha.
+                        Verifique a caixa de entrada (e a pasta de spam) do seu e-mail cadastrado e siga o link para definir sua nova senha.
                       </p>
                     </div>
                   </div>
@@ -254,25 +261,27 @@ export default function Login() {
               ) : (
                 <form onSubmit={handleResetPassword} className="space-y-4">
                   {resetError && (
-                    <div className="bg-red-50 text-red-700 p-3.5 rounded-xl text-xs border border-red-100 font-bold">
-                      {resetError}
+                    <div className="bg-amber-50 text-amber-900 p-4 rounded-xl text-xs border border-amber-200 font-bold flex items-start gap-2.5">
+                      <AlertCircle size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{resetError}</span>
                     </div>
                   )}
 
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
-                      E-mail Institucional
+                      Usuário ou E-mail
                     </label>
                     <div className="relative">
-                      <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                      <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                       <input
                         required
-                        type="email"
-                        value={resetEmail}
-                        onChange={(e) => setResetEmail(e.target.value)}
+                        type="text"
+                        value={resetIdentifier}
+                        onChange={(e) => setResetIdentifier(e.target.value)}
                         className="w-full bg-slate-50 border-2 border-slate-100 text-crb-navy font-medium py-3 pl-12 pr-4 rounded-2xl focus:border-crb-blue outline-none transition-all placeholder:text-slate-400 text-sm"
-                        placeholder="nome.sobrenome@crb4.org.br"
-                        autoComplete="email"
+                        placeholder="seu.usuario ou seu@email.com"
+                        autoCapitalize="none"
+                        autoCorrect="off"
                       />
                     </div>
                   </div>
@@ -294,7 +303,7 @@ export default function Login() {
                         <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                       ) : (
                         <>
-                          <span>Enviar Link</span>
+                          <span>Continuar</span>
                           <ArrowRight size={16} />
                         </>
                       )}
