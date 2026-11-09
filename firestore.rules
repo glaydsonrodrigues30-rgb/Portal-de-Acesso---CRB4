@@ -51,10 +51,21 @@ service cloud.firestore {
 
     // --- Usernames Mapping Collection ---
     // Permite get público para resolução de login por nome de usuário; proíbe listagem pública
+    // Protege contra sobrescrita indevida por outros usuários e restringe os campos a email e uid
     match /usernames/{username} {
       allow get: if true;
       allow list: if false;
-      allow create, update: if (isAdmin() || (isSignedIn() && request.resource.data.uid == request.auth.uid));
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['email', 'uid'])
+      );
+      allow update: if isAdmin() || (
+        isSignedIn() &&
+        resource.data.uid == request.auth.uid &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['email', 'uid'])
+      );
       allow delete: if isAdmin();
     }
 

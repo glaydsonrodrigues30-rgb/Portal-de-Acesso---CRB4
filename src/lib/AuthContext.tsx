@@ -67,10 +67,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const cleanUser = normalizeUsername(data.username);
             await setDoc(doc(db, 'usernames', cleanUser), {
               email: fbUser.email,
-              uid: fbUser.uid,
-              username: cleanUser,
-              updatedAt: new Date().toISOString()
-            }, { merge: true });
+              uid: fbUser.uid
+            });
           }
         }
       }
@@ -120,11 +118,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
               // Garante mapeamento usernames/{usuario}
               await setDoc(doc(db, 'usernames', cleanUser), {
-                username: cleanUser,
                 email: fbUser.email.toLowerCase(),
-                uid: fbUser.uid,
-                updatedAt: new Date().toISOString()
-              }, { merge: true });
+                uid: fbUser.uid
+              });
             }
           }
 
@@ -145,10 +141,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   const cleanUser = normalizeUsername(data.username);
                   await setDoc(doc(db, 'usernames', cleanUser), {
                     email: fbUser.email,
-                    uid: fbUser.uid,
-                    username: cleanUser,
-                    updatedAt: new Date().toISOString()
-                  }, { merge: true });
+                    uid: fbUser.uid
+                  });
                 }
               }
 
@@ -269,11 +263,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           userSnap = await getDoc(userDocRef);
 
           await setDoc(doc(db, 'usernames', cleanUser), {
-            username: cleanUser,
             email: fbUser.email?.toLowerCase() || emailToAuth.toLowerCase(),
-            uid: fbUser.uid,
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
+            uid: fbUser.uid
+          });
         }
       }
 
@@ -290,9 +282,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           try {
             const currentUsernameDoc = await getDoc(doc(db, 'usernames', cleanUser));
             if (currentUsernameDoc.exists() && currentUsernameDoc.data().email !== fbUser.email) {
-              await updateDoc(doc(db, 'usernames', cleanUser), {
+              await setDoc(doc(db, 'usernames', cleanUser), {
                 email: fbUser.email,
-                updatedAt: new Date().toISOString()
+                uid: fbUser.uid
               });
             }
           } catch (e) {

@@ -112,12 +112,10 @@
       "description": "Mapeamento público de username para e-mail institucional e UID para autenticação",
       "type": "object",
       "properties": {
-        "username": { "type": "string" },
         "email": { "type": "string" },
-        "uid": { "type": "string" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "uid": { "type": "string" }
       },
-      "required": ["username", "email", "uid"]
+      "required": ["email", "uid"]
     }
   },
   "firestore": {

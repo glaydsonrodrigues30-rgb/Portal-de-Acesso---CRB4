@@ -154,10 +154,8 @@ export default function Usuarios() {
 
       // Grava usernames/{usuario}
       await setDoc(doc(db, 'usernames', cleanUsername), {
-        username: cleanUsername,
         email: internalEmail,
-        uid: createdUid,
-        updatedAt: new Date().toISOString()
+        uid: createdUid
       });
 
       await fetchUsers();
@@ -213,11 +211,9 @@ export default function Usuarios() {
 
       // Atualiza o mapeamento usernames/{usuario} para apontar para a nova conta
       await setDoc(doc(db, 'usernames', cleanUsername), {
-        username: cleanUsername,
         email: newAuthEmail,
-        uid: newUid,
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
+        uid: newUid
+      });
 
       // Atualiza / cria users/{newUid} com os dados existentes e precisaTrocarSenha=true
       const updatedUserDoc: User = {

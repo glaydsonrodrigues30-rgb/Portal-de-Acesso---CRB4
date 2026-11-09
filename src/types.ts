@@ -14,10 +14,8 @@ export interface User {
 }
 
 export interface UsernameDoc {
-  username: string;
   email: string;
   uid: string;
-  updatedAt?: string;
 }
 
 export interface ArquivoAnexo {
